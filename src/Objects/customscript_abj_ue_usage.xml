@@ -1,0 +1,22 @@
+<usereventscript scriptid="customscript_abj_ue_usage">
+  <description>ABJ usage user event that applies custom price list values to item lines.</description>
+  <isinactive>F</isinactive>
+  <name>ABJ UE Usage</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyowner>T</notifyowner>
+  <notifyuser>F</notifyuser>
+  <scriptfile>[/SuiteScripts/abj_ue_usage.js]</scriptfile>
+  <scriptdeployments>
+    <scriptdeployment scriptid="customdeploy_abj_ue_usage_so">
+      <isdeployed>T</isdeployed>
+      <loglevel>DEBUG</loglevel>
+      <status>TESTING</status>
+      <recordtype>salesorder</recordtype>
+    </scriptdeployment>
+  </scriptdeployments>
+  <libraries>
+    <library>
+      <scriptfile>[/SuiteScripts/abj_price_pricelist_helper.js]</scriptfile>
+    </library>
+  </libraries>
+</usereventscript>
