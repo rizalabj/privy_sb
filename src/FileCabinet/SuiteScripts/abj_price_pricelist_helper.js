@@ -232,7 +232,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       // Menggabungkan SO ID dan SO Line ID agar benar-benar unik secara global
       const bucketId = (result.so_id && result.so_line_id) 
           ? 'SO_' + result.so_id + '_LINE_' + result.so_line_id 
-          : 'PL_' + result.privyPriceListId;
+          : 'PL_' + result.id;
 
       if (!bucketMapsByItem[itemId]) {
         bucketMapsByItem[itemId] = new Map();
