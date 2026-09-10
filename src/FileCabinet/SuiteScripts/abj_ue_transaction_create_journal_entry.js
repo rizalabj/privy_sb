@@ -6,12 +6,12 @@ define(['N/task', 'N/log', 'N/search'], (task, log, search) => {
     
     const APPROVAL_CONFIG = {
         'salesorder': {
-            statusField: 'orderstatus', // order status pending fulfillment
-            approvedValue: 2
+            statusField: 'status', // order status pending fulfillment
+            approvedValue : 'pendingbilling'
         },
         'invoice': {
             statusField: 'approvalstatus', // Ubah ke 'status' jika Invoice Anda tidak pakai approval routing
-            approvedValue: 2               // Sesuaikan valuenya jika pakai field 'status'
+            approvedValue: 2,               // Sesuaikan valuenya jika pakai field 'status'
         }
     };
 
@@ -33,8 +33,10 @@ define(['N/task', 'N/log', 'N/search'], (task, log, search) => {
 
         let oldStatus = null;
         if (oldRec) {
-            oldStatus = oldRec.getValue({ fieldId: config.statusField });
+            oldStatus = oldRec.getValue({ fieldId: config.statusField }).toLowerCase().replaceAll(" ", "");
         }
+
+        
 
         let newDbStatus = null;
 
@@ -45,21 +47,24 @@ define(['N/task', 'N/log', 'N/search'], (task, log, search) => {
                 columns: [config.statusField]
             });
             log.debug('Status', `Lookup Result: ${JSON.stringify(lookup)}`);
-            log.debug('old status', oldStatus);
+            
 
             const rawDbValue = lookup[config.statusField];
             if (Array.isArray(rawDbValue) && rawDbValue.length > 0) {
-                newDbStatus = rawDbValue[0].value;
+                newDbStatus = rawDbValue[0].value?.toLowerCase().replaceAll(" ", "");
             } else {
-                newDbStatus = rawDbValue;
+                newDbStatus = rawDbValue?.toLowerCase().replaceAll(" ", "");
             }
         } catch (e) {
             log.error('Lookup Status Error', e);
-            newDbStatus = rec.getValue({ fieldId: config.statusField });
+            newDbStatus = rec.getValue({ fieldId: config.statusField })?.toLowerCase().replaceAll(" ", "");
         }
 
+        log.debug('old status', oldStatus);
+        log.debug('new status', newDbStatus);
+
         let approved = (newDbStatus == config.approvedValue) && (newDbStatus != oldStatus);
-        // approved = true; // For testing purposes, always trigger the Map/Reduce
+        log.debug('approved', approved);
         if (approved) {
             try {
                 const mrTask = task.create({

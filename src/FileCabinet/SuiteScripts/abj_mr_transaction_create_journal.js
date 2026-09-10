@@ -36,19 +36,19 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                     value: pic
                 });
             }
-            if(headerBillingType){
-                jeRec.setValue({ 
-                    fieldId: 'cseg_abj_billing_ty', 
-                    value: headerBillingType 
-                });
-            }
+            // if(headerBillingType){
+            //     jeRec.setValue({ 
+            //         fieldId: 'cseg_abj_billing_ty', 
+            //         value: headerBillingType 
+            //     });
+            // }
 
             // Add Debit Line
             jeRec.selectNewLine({ sublistId: 'line' });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: debitAccount });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit', value: amortAmount });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_link_transaction', value: trxId });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: billingType });
+            // jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: billingType });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_days_to_amortize', value: (Number(daysToAmortize) - 1) });
             jeRec.commitLine({ sublistId: 'line' });
             
@@ -57,7 +57,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: creditAccount });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit', value: amortAmount });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_link_transaction', value: trxId });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: billingType });
+            // jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: billingType });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_days_to_amortize', value: (Number(daysToAmortize) - 1) });
             jeRec.commitLine({ sublistId: 'line' });
 
@@ -173,26 +173,36 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
 
 
             // Extract Line Values
-            const amount = parseFloat(values.amount) || 0;
-            const daysToAmortize = parseInt(values.custcol_abj_days_to_amortize) || 1;
-            const billingType = values['line.cseg_abj_billing_ty'].value;
-            const startDate = values.custcol_abj_billing_start_date;
-            let startDateDate = typeof startDate === 'string' ? format.parse({ value: startDate, type: format.Type.DATE }) : new Date(startDate);
-            let nextDate = new Date(startDateDate);
-            nextDate.setDate(nextDate.getDate() + 1);
+            let amount = parseFloat(values.amount) || 0;
+            const totalAfterOneTimeDiscount = values.custcol_abj_total_after_1time_disc || 0;
+            if(totalAfterOneTimeDiscount && totalAfterOneTimeDiscount > 0){
+                amount = totalAfterOneTimeDiscount;
+            }
+            const daysToAmortize = values.custcol_abj_days_to_amortize || 1;
+            const billingType = values['class'].value;
+            // const startDate = values.custcol_abj_billing_start_date;
+            const startDate = values.custcol_abj_agreement_start_date;
+            // const endDate = values.custcol_abj_billing_end_date;
+            const endDate = values.custcol_abj_agreement_end_date;
+            let nextDateString = '';
+            if(startDate){
+                let startDateDate = typeof startDate === 'string' ? format.parse({ value: startDate, type: format.Type.DATE }) : new Date(startDate);
+                let nextDate = new Date(startDateDate);
+                nextDate.setDate(nextDate.getDate() + 1);
+    
+                // 4. (Opsional) Format kembali ke string jika diperlukan oleh NetSuite
+                nextDateString = format.format({ value: nextDate, type: format.Type.DATE });
+                log.debug('startDate',startDate);
+                log.debug('nextDateString',nextDateString);
 
-            // 4. (Opsional) Format kembali ke string jika diperlukan oleh NetSuite
-            let nextDateString = format.format({ value: nextDate, type: format.Type.DATE });
-            log.debug('startDate',startDate);
-            log.debug('nextDateString',nextDateString);
+            }
         
-            const endDate = values.custcol_abj_billing_end_date;
             const pic= values.custbody2.value;
-            const headerBillingType = values.cseg_abj_billing_ty.value;
+            const headerBillingType = values.class.value;
 
             const amortAmount = amount / daysToAmortize;
             
-            const debitAccount = values['custrecord_abj_billingtype_account.cseg_abj_billing_ty'].value;
+            const debitAccount = values['custrecord_abj_rev_rec_account.class'].value;
             const creditAccount = values['incomeaccount.item'].value;
 
             log.debug('Processing Line', `SO: ${trxId} | Line: ${lineNum} | Amort Amount: ${amortAmount}`);
