@@ -2,194 +2,242 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
-define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime','N/search'], (record, integrationLogRecord, runtime, search) => {
 
-    const get = (context) => {
-        return { message: 'GET request received', params: context };
+
+define(['N/record', 'N/log', 'N/error', 'N/format', 'N/search', 'N/runtime', 'N/query'], (record, log, error, format, search, runtime, query) => {
+
+    function createLog(req, resp, trx, status, refnumber, isDataWH) {
+        var recLog = record.create({
+            type: 'customtransaction_abj_log_integratio'
+        })
+        const scriptObj = runtime.getCurrentScript()
+        var scriptId = scriptObj.id
+        var deploymentId = scriptObj.deploymentId
+
+        recLog.setValue('custbody_abj_integlog_job_name', 'ABJ RS | CREATE CUST HIERARCHY')
+        recLog.setValue('custbody_abj_integlog_job_type', 'Restlet - POST')
+        recLog.setValue('custbody_abj_integlog_job_link', 'URL Endpoint')
+        recLog.setValue('custbody_abj_integlog_request_body', req)
+        recLog.setValue('custbody_abj_integlog_response_body', resp)
+        // recLog.setValue('custbody_abj_integlog_trx_number', trx)
+        recLog.setValue('custbody_abj_integlog_cust_hierarchy', trx)
+        recLog.setValue('custbody_abj_integlog_status', status)
+        recLog.setValue('custbody_abj_usage_ref_number', refnumber)
+        recLog.setValue('custbody_abj_integlog_isdatawarehouse', isDataWH)
+        recLog.setValue('custbody_abj_integlog_script_id', scriptId)
+        recLog.setValue('custbody_abj_integlog_deploy_script_id', deploymentId)
+
+        var recLogSave = recLog.save()
+        log.debug('recLogSave', recLogSave)
+    }
+
+    return {
+        post: (context) => {
+            var refNum = context.data.ref_number
+            var npwp = context.data.npwp
+            var isDataWH = context.data.is_data_warehouse
+
+            var respData = {
+                ref_number: refNum,
+                internal_id: null
+            }
+
+            var isNewRefNum = false
+            var isNewNPWP = false
+
+            try {
+                //validasi transaction type
+                if (!context.record_type || context.record_type != 'customer_hierarchy') {
+                    throw ({
+                        message: 'This endpoint only accepts record_type: customer_hierarchy'
+                    });
+                }
+
+                //validasi ref_num
+                var searchRefNum = search.create({
+                    type: 'customrecord_abj_privy_cust_hierarchy',
+                    filters: [
+                        ['custrecord_abj_ref_number', 'is', refNum]
+                    ],
+                    columns: [
+                        'custrecord_abj_ref_number'
+                    ]
+                })
+                var searchRefNumResult = searchRefNum.run().getRange(0, 1)
+                if (searchRefNumResult.length > 0) {
+                    throw ({
+                        message: 'Ref Number: ' + refNum + ' is already exist'
+                    });
+                } else {
+                    isNewRefNum = true
+                }
+
+                if (isNewRefNum == true) {
+                    var customer_id = context.data.customer_id
+                    var level_type_id = context.data.level_type_id
+                    var enterprise_id = context.data.enterprise_id
+                    var enterprise_name = context.data.enterprise_name
+                    var merchant_id = context.data.merchant_id
+                    var merchant_name = context.data.merchant_name
+                    var application_id = context.data.application_id
+                    var application_name = context.data.application_name
+                    var channel_id = context.data.channel_id
+                    var channel_name = context.data.channel_name
+                    var enterprise_id_hierarchy = context.data.enterprise_id_hierarchy
+                    var merchant_id_hierarchy = context.data.merchant_id_hierarchy
+                    var application_id_hierarchy = context.data.application_id_hierarchy
+                    var key_account = context.data.key_account
+
+                    //validation
+                    if (!customer_id || customer_id == '' || customer_id == null) {
+                        throw ({
+                            message: 'customer_id is empty'
+                        });
+                    }
+                    if (!level_type_id || level_type_id == '' || level_type_id == null) {
+                        throw ({
+                            message: 'level_type_id is empty'
+                        });
+                    } else {
+                        var searchLevelType = search.create({
+                            type: 'customlist_abj_level_type_list',
+                            filters: [
+                                ['internalid', 'is', level_type_id]
+                            ],
+                            columns: [
+                                'name'
+                            ]
+                        })
+                        var searchLevelTypeRun = searchLevelType.run().getRange(0, 1)
+                        if (searchLevelTypeRun.length > 0) {
+                            //
+                        } else {
+                            throw ({
+                                message: 'Level Type with id ' + level_type_id + ' was not found',
+                            });
+                        }
+                    }
+
+                    if(level_type_id == 1){ // Validasi Eterprise
+                        if (!enterprise_id || enterprise_id == '' || enterprise_id == null) {
+                            throw ({
+                                message: 'enterprise_id is empty'
+                            });
+                        }
+                        if (!enterprise_name || enterprise_name == '' || enterprise_name == null) {
+                            throw ({
+                                message: 'enterprise_name is empty'
+                            });
+                        }
+                    }
+                    if(level_type_id == 2){ // Validasi Merchant
+                        if (!merchant_id || merchant_id == '' || merchant_id == null) {
+                            throw ({
+                                message: 'merchant_id is empty'
+                            });
+                        }
+                        if (!merchant_name || merchant_name == '' || merchant_name == null) {
+                            throw ({
+                                message: 'merchant_name is empty'
+                            });
+                        }
+                    }
+                    if(level_type_id == 3){ // Validasi Application
+                        if (!application_id || application_id == '' || application_id == null) {
+                            throw ({
+                                message: 'application_id is empty'
+                            });
+                        }
+                        if (!application_name || application_name == '' || application_name == null) {
+                            throw ({
+                                message: 'application_name is empty'
+                            });
+                        }
+                    }
+                    if(level_type_id == 4){ // Validasi Application
+                        if (!channel_id || channel_id == '' || channel_id == null) {
+                            throw ({
+                                message: 'channel_id is empty'
+                            });
+                        }
+                        if (!channel_name || channel_name == '' || channel_name == null) {
+                            throw ({
+                                message: 'channel_name is empty'
+                            });
+                        }
+                    }
+
+                    //create record
+                    var rec = record.create({
+                        type: 'customrecord_abj_privy_cust_hierarchy'
+                    })
+                    rec.setValue({ fieldId: 'customform', value: 28 }) // 28 Privy Customer Hierarchy Form
+                    rec.setValue({ fieldId: 'custrecord_abj_customer_link', value: customer_id })
+                    rec.setValue({ fieldId: 'custrecord_abj_level_type', value: level_type_id })
+                    rec.setValue({ fieldId: 'custrecord_abj_enterprise_id', value: enterprise_id })
+                    rec.setValue({ fieldId: 'custrecord_abj_enterprise_name', value: enterprise_name })
+                    rec.setValue({ fieldId: 'custrecord_abj_merchant_id', value: merchant_id })
+                    rec.setValue({ fieldId: 'custrecord_abj_merchant_name', value: merchant_name })
+                    rec.setValue({ fieldId: 'custrecord_abj_application_id', value: application_id })
+                    rec.setValue({ fieldId: 'custrecord_abj_application_name', value: application_name })
+                    rec.setValue({ fieldId: 'custrecord_abj_channel_id', value: channel_id })
+                    rec.setValue({ fieldId: 'custrecord_abj_channel_name', value: channel_name })
+                    rec.setValue({ fieldId: 'custrecord_hierarchy_enterprise', value: enterprise_id_hierarchy })
+                    rec.setValue({ fieldId: 'custrecord_abj_hierarchy_merhant', value: merchant_id_hierarchy })
+                    rec.setValue({ fieldId: 'custrecord_abj_hierarchy_application', value: application_id_hierarchy })
+                    rec.setValue({ fieldId: 'custrecord_abj_ref_number', value: refNum })
+                    if (key_account == true) {
+                        rec.setValue({ fieldId: 'custentity_abj_key_account', value: true })
+                    }
+
+                    var recSave = rec.save()
+                    log.debug('recSave', recSave)
+                    if (recSave) {
+                        var reqBody = JSON.stringify(context, null, 2)
+                        // reqBody = reqBody.replace(/ /g, '\u00A0');
+                        var respBody = {
+                            "status_code": 200,
+                            "status": "success",
+                            "message": "Customer created successfully.",
+                            "data": {
+                                "ref_number": refNum,
+                                "internal_id": recSave
+                            }
+                        }
+
+                        // var respBodyText = JSON.stringify(respBody, null, 2).replace(/ /g, '\u00A0');
+                        var respBodyText = JSON.stringify(respBody, null, 2)
+
+                        //create log
+                        createLog(reqBody, respBodyText, recSave, true, refNum, isDataWH)
+
+                        return respBody
+                    }
+
+                }
+
+            } catch (error) {
+                log.debug('error', error.message)
+
+                var reqBodyError = JSON.stringify(context, null, 2)
+                // reqBodyError = reqBodyError.replace(/\r\n/g, '\n');
+                // reqBodyError = reqBodyError.replace(/ /g, '\u00A0');
+
+                var respBodyError = {
+                    "status_code": 400,
+                    "status": "Failed",
+                    "message": error.message,
+                    "data": respData
+                }
+                // var respBodyErrorText = JSON.stringify(respBodyError, null, 2).replace(/ /g, '\u00A0');
+                var respBodyErrorText = JSON.stringify(respBodyError, null, 2)
+
+                //create log
+                createLog(reqBodyError, respBodyErrorText, null, false, refNum, isDataWH)
+
+                return respBodyError
+            }
+        }
     };
 
-    const cleanInternalId = (string) =>{
-      // remove any non-digit characters inluding spaces
-      log.debug('string', string);
-      if(typeof string === 'number'){
-        return string;
-      }
-      
-      if(!string || string == undefined || string == null || string == ''){
-        return '';
-      }
-      const val = string.replace(/\D/g, '');
-      const num = val ? parseInt(val) : '';
-      return num;
-    }
-
-    const generateResponse = ({statusParam, message, refNumber, id}) => {
-        log.debug('status oparam', statusParam)
-        let statusCode = statusParam ? 200 : 400;
-        let status = statusParam ? "success" : "failed";
-        return {
-            "status_code": statusCode,
-            "status": status,
-            "message": message,
-            "data": {
-                "ref_number": refNumber,
-                "internal_id" : id
-            }
-        }
-    }
-
-    const setFieldValue = (rec,fieldId, value) =>{
-        if(value){
-            rec.setValue({
-                fieldId : fieldId,
-                value : value
-            })
-        }
-    }
-
-    const setSublistFieldValue = (rec,sublistId,fieldId, value, line) =>{
-        if(value != null && value != undefined && value != ''){
-            rec.setSublistValue({
-                sublistId : sublistId,
-                fieldId : fieldId,
-                value : value,
-                line : line
-            })
-        }
-    }
-
-    const seachCustomerByCusHierarchy = (custHier) =>{
-        var lookupCust = search.lookupFields({
-            type: 'customrecord_abj_privy_cust_hierarchy',
-            id: custHier,
-            columns: ['custrecord_abj_customer_link']
-        });
-
-        log.debug('search customer', lookupCust);
-        if (!lookupCust && lookupCust.custrecord_abj_customer_link) {
-           return false;
-        }
-
-        return lookupCust.custrecord_abj_customer_link[0].value;
-    }
-
-    let formatDate = (dateString) =>{
-        if(!dateString || dateString == undefined || dateString == null || dateString == ''){
-            return '';
-        }
-        const date = new Date(dateString);
-        log.debug('date', date);
-        return date;
-    }
-
-    const createUsageRecord = (data) =>{
-        try {
-            if(data.transaction_type !== 'usage'){
-                return {
-                    status: false,
-                    message: 'Invalid transaction type. Only "usage" is allowed.',
-                    id: null
-                }
-            }
-            let rec = record.create({
-                type : 'customsale_abj_usage',
-            });
-
-            if(!data?.data?.customer_hierarchy_id){
-                return {
-                    status: false,
-                    message: 'customer_hierarchy_id is requireds.',
-                    id: null
-                }
-            }
-
-            let customer = seachCustomerByCusHierarchy(data?.data?.customer_hierarchy_id);
-            log.debug('customer', customer);
-            if(!customer){
-               return {
-                    status: false,
-                    message: 'customer not found, customer_hierarchy_id : '+ data?.data?.customer_hierarchy_id,
-                    id: null
-                } 
-            }
-
-            log.debug('data',data.data);
-            log.debug('data?.customer_hierarchy?', data?.data?.customer_hierarchy_id);
-            log.debug('data?.customer_hierarchy_config?', data?.data?.customer_hierarchy_config_id);
-            setFieldValue(rec,'customform', 170);
-            setFieldValue(rec,'entity',customer);
-            setFieldValue(rec,'custbody_abj_hierarchy_customer_', cleanInternalId(data?.data?.customer_hierarchy_id));
-            setFieldValue(rec,'custbody_abj_id_cust_hierarchy_con', cleanInternalId(data?.data?.customer_hierarchy_config_id));
-            setFieldValue(rec,'trandate', formatDate(data?.data?.trandate));
-            setFieldValue(rec,'custbody_abj_pg_order_id', data?.data?.order_id);
-            setFieldValue(rec,'custbody_abj_usage_ref_number', data?.data?.ref_number);
-
-            let account = rec.getValue('account');
-            let exchangeRate = rec.getValue('exchangerate');
-            let currency = rec.getValue('currency');
-
-            setFieldValue(rec, 'account', account);
-            setFieldValue(rec, 'exchangerate', exchangeRate);
-            setFieldValue(rec, 'currency', currency);
-
-
-            let order_items = data?.data?.order_items;
-            for (let i = 0; i < order_items.length; i++) {
-                let rowData = order_items[i];
-                setSublistFieldValue(rec, 'item','item', cleanInternalId(rowData?.item_id), i);
-                setSublistFieldValue(rec, 'item','quantity', rowData.quantity, i);
-                setSublistFieldValue(rec, 'item','price', -1, i);
-                setSublistFieldValue(rec, 'item','rate', rowData.final_unit_price, i);
-                setSublistFieldValue(rec, 'item','amount', rowData.final_amount, i);
-            }
-
-            let recId = rec.save();
-            return {
-                status : true,
-                message : 'Usage created successfully.',
-                id : recId
-            }
-        } catch (error) {
-            return {
-                status : false,
-                message : error.message,
-                id : null
-            }
-        }
-    }
-
-    const post = (context) => {
-        log.debug('context', context)
-
-        let usage = createUsageRecord(context);
-        log.debug('usage', usage);
-
-        let response = generateResponse({ 
-            statusParam : usage.status, 
-            message : usage.message,
-            refNumber : context?.data?.ref_number,
-            id : usage.id
-        });
-
-        var integrationLogRecordId = context.log_id || null;
-        const scriptObj = runtime.getCurrentScript();
-        var scriptId = scriptObj.id;
-        var deploymentId = scriptObj.deploymentId;
-        const integrationLogRec = integrationLogRecord.createSOSIntegrationLog({
-          jobName: 'ABJ RS | CREATE USAGE',
-          jobType: 'Restlet - POST',
-          jobLink: 'JOB LINK - URL DARI POS',
-          reqBody: JSON.stringify(context),
-          resBody: JSON.stringify(response),
-          linkTrx: usage.id,
-          status : usage.status,
-          logId : integrationLogRecordId,
-          scriptId : scriptId,
-          deploymentId : deploymentId,
-          tranETPNumber : context?.data?.tran_etp || ''
-        });
-        return response;
-    };
-
-    return { post };
 });
