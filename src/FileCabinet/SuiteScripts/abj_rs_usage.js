@@ -135,15 +135,15 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
             setFieldValue(rec, 'currency', currency);
 
 
-            let order_items = data?.data?.order_items;
-            for (let i = 0; i < order_items.length; i++) {
-                let rowData = order_items[i];
-                setSublistFieldValue(rec, 'item','item', cleanInternalId(rowData?.item_id), i);
-                setSublistFieldValue(rec, 'item','quantity', rowData.quantity, i);
-                // setSublistFieldValue(rec, 'item','price', -1, i);
-                // setSublistFieldValue(rec, 'item','rate', rowData.final_unit_price || 1000, i);
-                // setSublistFieldValue(rec, 'item','amount', rowData.final_amount || 1000, i);
-            }
+            // let order_items = data?.data?.order_items;
+            // for (let i = 0; i < order_items.length; i++) {
+            //     let rowData = order_items[i];
+            //     setSublistFieldValue(rec, 'item','item', cleanInternalId(rowData?.item_id), i);
+            //     setSublistFieldValue(rec, 'item','quantity', rowData.quantity, i);
+            // }
+            let i =0;
+            setSublistFieldValue(rec, 'item','item', cleanInternalId(data?.data?.item_id), i);
+            setSublistFieldValue(rec, 'item','quantity', data?.data?.quantity, i);
 
             log.debug('saving', 'progresss');
             let recId = rec.save();
@@ -315,5 +315,8 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
         return response;
     }
 
-    return { post, put };
+    return { 
+        post,
+        // put 
+    };
 });
