@@ -123,6 +123,8 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
             setFieldValue(rec,'trandate', formatDate(data?.data?.trandate));
             setFieldValue(rec,'custbody_abj_pg_order_id', data?.data?.order_id); //
             setFieldValue(rec,'custbody_abj_usage_ref_number', data?.data?.ref_number);
+            
+
 
             let account = rec.getValue('account');
             let exchangeRate = rec.getValue('exchangerate');
@@ -132,7 +134,8 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
 
             setFieldValue(rec, 'account', account);
             setFieldValue(rec, 'exchangerate', exchangeRate);
-            setFieldValue(rec, 'currency', currency);
+            setFieldValue(rec,'currency', data?.data?.currency_id);
+            // setFieldValue(rec, 'currency', currency);
 
 
             // let order_items = data?.data?.order_items;
