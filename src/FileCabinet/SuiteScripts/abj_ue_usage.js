@@ -84,11 +84,21 @@ define(['./abj_price_pricelist_helper', 'N/log', 'N/record'], (priceListHelper, 
         let needsSave = false;
 
         try {
-          const soRecord = record.load({
-            type: record.Type.SALES_ORDER,
-            id: soId,
-            isDynamic: false
-          });
+          var soRecord = null;
+          try {
+            soRecord = record.load({
+              type: record.Type.SALES_ORDER, // it can be from sales order or invoice, needs transaction type
+              id: soId,
+              isDynamic: false
+            });
+          } catch (error) {
+            soRecord = record.load({
+              type: record.Type.INVOICE, // it can be from sales order or invoice, needs transaction type
+              id: soId,
+              isDynamic: false
+            });
+          }
+          
 
           const soLineCount = soRecord.getLineCount({ sublistId: 'item' });
           
