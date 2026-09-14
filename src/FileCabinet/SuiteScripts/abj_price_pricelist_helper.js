@@ -186,7 +186,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             t.trandate AS so_trandate
           FROM transactionline tl
           JOIN transaction t ON t.id = tl.transaction
-          WHERE t.type = 'SalesOrd'
+          WHERE t.type = 'SalesOrd' OR t.type = 'CustInvc'
         ) sol
           ON sol.item = pl.${PRICE_LIST_FIELD_MAP.item}
           AND sol.custcol_abj_id_price_list_line = pl.id
