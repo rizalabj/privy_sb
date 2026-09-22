@@ -4,6 +4,55 @@
  */
 define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runtime, format) => {
 
+    // 5. SO - Jurnal Amortization   segment di line jurnal diset, segment2 nya  : 
+    // Main Product Segment, Sub Product Segment, Product Type Segment, Enterprise Segment, 
+    // Merchant Segment, Application Segment, Channel Segment, Prepaid/Postpaid Segment, 
+    // Class/Billing Type, dan Item Description ke memo line di jurnal
+    const setJournalLine = ({
+        jeRec,
+        debitAccount,
+        creditAccount,
+        amortAmount,
+        trxId,
+        daysToAmortize,
+        mainProductSegment,
+        subProductSegment,
+        productSource,
+        productTypeSegment,
+        enterpriseSegment,
+        merchantSegment,
+        applicationSegment,
+        channelSegment,
+        prepaidPostpaidSegment,
+        classBillingType,
+        itemDescription
+    }) => {
+        jeRec.selectNewLine({ sublistId: 'line' });
+        if(debitAccount){
+            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: debitAccount });
+            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit', value: amortAmount });
+        }
+        if(creditAccount){
+            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: creditAccount });
+            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit', value: amortAmount });
+        }
+        jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_link_transaction', value: trxId });
+        jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_days_to_amortize', value: (Number(daysToAmortize) - 1) });
+        jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_days_to_amortize', value: (Number(daysToAmortize) - 1) });
+        if(mainProductSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_main_prod', value: mainProductSegment });
+        if(subProductSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_sub_prod', value: subProductSegment });
+        if(productSource) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_product_source', value: productSource });
+        if(productTypeSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_prod_type', value: productTypeSegment });
+        if(enterpriseSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_enterprise', value: enterpriseSegment });
+        if(merchantSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_merchant', value: merchantSegment });
+        if(applicationSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_applicatio', value: applicationSegment });
+        if(channelSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_channel_se', value: channelSegment });
+        if(prepaidPostpaidSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: prepaidPostpaidSegment });
+        if(classBillingType) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'class', value: classBillingType });
+        if(itemDescription) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'memo', value: itemDescription });
+        jeRec.commitLine({ sublistId: 'line' });
+    }
+
     const createJournalEntry = ({
         startDate,
         pic,
@@ -11,9 +60,19 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         debitAccount,
         amortAmount,
         trxId,
-        billingType,
         daysToAmortize,
-        creditAccount
+        creditAccount,
+        mainProductSegment,
+        subProductSegment,
+        productSource,
+        productTypeSegment,
+        enterpriseSegment,
+        merchantSegment,
+        applicationSegment,
+        channelSegment,
+        prepaidPostpaidSegment,
+        classBillingType,
+        itemDescription
     }) =>{
         try {
             const jeRec = record.create({
@@ -36,30 +95,55 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                     value: pic
                 });
             }
-            // if(headerBillingType){
-            //     jeRec.setValue({ 
-            //         fieldId: 'cseg_abj_billing_ty', 
-            //         value: headerBillingType 
-            //     });
-            // }
+            if(headerBillingType){
+                jeRec.setValue({ 
+                    fieldId: 'cseg_abj_billing_ty', 
+                    value: headerBillingType 
+                });
+            }
+
+            
 
             // Add Debit Line
-            jeRec.selectNewLine({ sublistId: 'line' });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: debitAccount });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit', value: amortAmount });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_link_transaction', value: trxId });
-            // jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: billingType });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_days_to_amortize', value: (Number(daysToAmortize) - 1) });
-            jeRec.commitLine({ sublistId: 'line' });
+            setJournalLine({ 
+                jeRec : jeRec,
+                debitAccount : debitAccount,
+                amortAmount : amortAmount,
+                daysToAmortize : daysToAmortize,
+                trxId : trxId,
+                mainProductSegment : mainProductSegment,
+                subProductSegment : subProductSegment,
+                productSource : productSource,
+                productTypeSegment : productTypeSegment,
+                enterpriseSegment : enterpriseSegment,
+                merchantSegment : merchantSegment,
+                applicationSegment :applicationSegment,
+                channelSegment : channelSegment,
+                prepaidPostpaidSegment : prepaidPostpaidSegment,
+                classBillingType : classBillingType,
+                itemDescription : itemDescription
+            });
             
             // Add Credit Line
-            jeRec.selectNewLine({ sublistId: 'line' });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: creditAccount });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit', value: amortAmount });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_link_transaction', value: trxId });
-            // jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: billingType });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_days_to_amortize', value: (Number(daysToAmortize) - 1) });
-            jeRec.commitLine({ sublistId: 'line' });
+            setJournalLine({ 
+                jeRec : jeRec,
+                creditAccount : creditAccount,
+                amortAmount : amortAmount,
+                daysToAmortize : daysToAmortize,
+                trxId : trxId,
+                mainProductSegment : mainProductSegment,
+                subProductSegment : subProductSegment,
+                productSource : productSource,
+                productTypeSegment : productTypeSegment,
+                enterpriseSegment : enterpriseSegment,
+                merchantSegment : merchantSegment,
+                applicationSegment :applicationSegment,
+                channelSegment : channelSegment,
+                prepaidPostpaidSegment : prepaidPostpaidSegment,
+                classBillingType : classBillingType,
+                itemDescription : itemDescription
+            });
+            
 
             const jeId = jeRec.save();
 
@@ -198,12 +282,25 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             }
         
             const pic= values.custbody2.value;
-            const headerBillingType = values.class.value;
+            let headerBillingType = values.class.value;
 
             const amortAmount = amount / daysToAmortize;
             
             const debitAccount = values['custrecord_abj_rev_rec_account.class'].value;
             const creditAccount = values['incomeaccount.item'].value;
+            const mainProductSegment = values['line.cseg_abj_main_prod'].value;
+            const subProductSegment = values['line.cseg_abj_sub_prod'].value;
+            const productSource = values['custcol_abj_product_source'].value;
+            const productTypeSegment = values['line.cseg_abj_prod_type'].value;
+            const enterpriseSegment = values['line.cseg_abj_enterprise'].value;
+            const merchantSegment = values['line.cseg_abj_merchant'].value;
+            const applicationSegment = values['line.cseg_abj_applicatio'].value;
+            const channelSegment = values['line.cseg_abj_channel_se'].value;
+            const prepaidPostpaidSegment = values['line.cseg_abj_billing_ty'].value;
+            const classBillingType = billingType;
+            const itemDescription = values.memo;
+
+            headerBillingType = prepaidPostpaidSegment;
 
             log.debug('Processing Line', `SO: ${trxId} | Line: ${lineNum} | Amort Amount: ${amortAmount}`);
 
@@ -217,7 +314,18 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 debitAccount,
                 headerBillingType,
                 pic,
-                trxId
+                trxId,
+                mainProductSegment,
+                subProductSegment,
+                productSource,
+                productTypeSegment,
+                enterpriseSegment,
+                merchantSegment,
+                applicationSegment,
+                channelSegment,
+                prepaidPostpaidSegment,
+                classBillingType,
+                itemDescription
             })
             log.debug('Journal Entry Created', `JE ID: ${jeId} for SO Line: ${lineNum}`);
 
