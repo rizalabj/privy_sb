@@ -134,7 +134,7 @@ define(['N/record', 'N/log', 'N/error', 'N/format', 'N/search', 'N/runtime', 'N/
                 }
                 
                 var respBodyErrorText = JSON.stringify(respBodyError, null, 2)
-                createLog(reqBodyError, respBodyErrorText, recId || null, false, refNum, isDataWH, 'Restlet - PUT')
+                createLog(reqBodyError, respBodyErrorText, null, false, refNum, isDataWH, 'Restlet - PUT')
 
                 return respBodyError
             }
