@@ -118,8 +118,8 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
             log.debug('data?.customer_hierarchy_config?', data?.data?.customer_hierarchy_config_id);
             // setFieldValue(rec,'customform', 170);
             setFieldValue(rec,'entity',customer);
-            setFieldValue(rec,'custbody_abj_hierarchy_customer_', cleanInternalId(data?.data?.customer_hierarchy_id));
             setFieldValue(rec,'custbody_abj_id_cust_hierarchy_con', cleanInternalId(data?.data?.customer_hierarchy_config_id));
+            setFieldValue(rec,'custbody_abj_hierarchy_customer_', cleanInternalId(data?.data?.customer_hierarchy_id));
             setFieldValue(rec,'trandate', formatDate(data?.data?.trandate));
             setFieldValue(rec,'custbody_abj_pg_order_id', data?.data?.order_id); //
             setFieldValue(rec,'custbody_abj_usage_ref_number', data?.data?.ref_number);
