@@ -113,7 +113,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     merchantSegment: result.merchant_segment,
     applicationSegment: result.application_segment,
     channelSegment: result.channel_segment,
-    isPrepaidOrPostpaid: Number(result.is_prepaid_or_postpaid) === PREPAID_VALUE ? 'prepaid' : 'postpaid',
+    isPrepaidOrPostpaid: Number(result.is_prepaid_or_postpaid),
     soOneTimeDiscountPerPcs: toNumberOrNull(result.so_one_time_discount_per_pcs),
     soId: toNumberOrNull(result.so_id),
     soLineId: toNumberOrNull(result.so_line_id),
@@ -186,7 +186,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             t.trandate AS so_trandate
           FROM transactionline tl
           JOIN transaction t ON t.id = tl.transaction
-          WHERE t.type = 'SalesOrd' OR t.type = 'CustInvc'
+          WHERE t.type = 'SalesOrd' 
+            OR (t.type = 'CustInvc' AND tl.createdFrom IS NULL AND t.customForm = 187)
         ) sol
           ON sol.item = pl.${PRICE_LIST_FIELD_MAP.item}
           AND sol.custcol_abj_id_price_list_line = pl.id
@@ -409,6 +410,12 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     }
     if (matchedPrice.publishedPrice !== null && matchedPrice.publishedPrice !== undefined) {
       transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'rate', line, value: matchedPrice.publishedPrice });
+      transactionRecord.setSublistValue({ 
+        sublistId: ITEM_SUBLIST_ID, 
+        fieldId: 'custcol_abj_total_published_price', 
+        line, 
+        value: Number(matchedPrice.publishedPrice) * Number(allocatedQuantity)
+      });
     }
     if (matchedPrice.finalPrice !== null && matchedPrice.finalPrice !== undefined) {
       transactionRecord.setSublistValue({
@@ -416,6 +423,12 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         fieldId: 'custcol_abj_final_price',
         line,
         value: matchedPrice.finalPrice
+      });
+      transactionRecord.setSublistValue({
+        sublistId: ITEM_SUBLIST_ID,
+        fieldId: 'custcol_abj_total_final_price',
+        line,
+        value: Number(matchedPrice.finalPrice) * Number(allocatedQuantity)
       });
     }
     if (matchedPrice.billingType !== null && matchedPrice.billingType !== undefined) {
@@ -428,8 +441,20 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         line,
         value: matchedPrice.discountOrPremium
       });
+      transactionRecord.setSublistValue({
+        sublistId: ITEM_SUBLIST_ID,
+        fieldId: 'custcol_abj_total_discount_premium',
+        line,
+        value: Number(matchedPrice.discountOrPremium) * Number(allocatedQuantity)
+      });
     }
     if (matchedPrice.soOneTimeDiscountPerPcs) {
+      transactionRecord.setSublistValue({
+        sublistId: ITEM_SUBLIST_ID,
+        fieldId: 'custcol_abj_dis_onetime_pcs',
+        line,
+        value: Math.abs(Number(matchedPrice.soOneTimeDiscountPerPcs))
+      });
       transactionRecord.setSublistValue({
         sublistId: ITEM_SUBLIST_ID,
         fieldId: 'custcol_abj_one_time_discount',
@@ -479,6 +504,18 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         line,
         value: matchedPrice.soLineId
       });
+    }
+    if (matchedPrice.isPrepaidOrPostpaid !== null && matchedPrice.isPrepaidOrPostpaid !== undefined) {
+      transactionRecord.setSublistValue({
+        sublistId: ITEM_SUBLIST_ID,
+        fieldId: 'cseg_abj_billing_ty',
+        line,
+        value: matchedPrice.isPrepaidOrPostpaid
+      });
+      transactionRecord.setValue({
+        fieldId : 'cseg_abj_billing_ty',
+        value : matchedPrice.isPrepaidOrPostpaid
+      })
     }
   };
 
@@ -569,7 +606,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           continue;
         }
 
-        const prepaidEntries = priceListEntries.filter((entry) => entry.isPrepaidOrPostpaid === 'prepaid');
+        const prepaidEntries = priceListEntries.filter((entry) => entry.isPrepaidOrPostpaid === PREPAID_VALUE);
         log.debug('prepaidEntries', prepaidEntries);
         let allocations;
 
