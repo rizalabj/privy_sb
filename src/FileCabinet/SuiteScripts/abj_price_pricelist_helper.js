@@ -28,7 +28,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     merchantSegment: 'cseg_abj_merchant',
     applicationSegment: 'cseg_abj_applicatio',
     channelSegment: 'cseg_abj_channel_se',
-    isPrepaidOrPostpaid: 'custrecord_abj_prepaid_postpaid'
+    isPrepaidOrPostpaid: 'custrecord_abj_prepaid_postpaid',
+    priceLevel : 'custrecord_abj_pricing'
   };
 
   const PREPAID_VALUE = 13;
@@ -41,8 +42,6 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     34: 'bundling'
   };
 
-  // Fields we always set explicitly per allocation - never let the raw
-  // snapshot copy clobber these after we've applied price-list-specific values.
   const PRICE_LIST_DRIVEN_FIELDS = [
     'quantity',
     'price',
@@ -61,10 +60,6 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
   ];
 
   const escapeSqlValue = (value) => String(value).replace(/'/g, "''");
-
-  // ---------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------
 
   const formatDateForSuiteQL = (dateValue) => {
     if (!dateValue) {
@@ -91,7 +86,6 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     return Number.isNaN(parsedValue) ? null : parsedValue;
   };
 
-  // Some SuiteQL drivers return boolean columns as 'T'/'F' strings.
   const toBooleanFlag = (value) => (value === 'T' || value === true || Number(value) === 1 ? 1 : 0);
 
   const mapPriceListRow = (result) => ({
@@ -118,17 +112,13 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     soId: toNumberOrNull(result.so_id),
     soLineId: toNumberOrNull(result.so_line_id),
     soTrandate: result.so_trandate,
-    // Cumulative qty already used against this specific prepaid bucket, as of
-    // the most recent SO line that referenced it (see dedup logic below).
     soQtyUsage: toNumberOrNull(result.so_qty_usage),
-    soQty : Math.abs(toNumberOrNull(result.so_qty))
+    soQty : Math.abs(toNumberOrNull(result.so_qty)),
+    priceLevel : result.price_level,
+    usedQuantity : Math.abs(result.used_quantity)
   });
 
-  // ---------------------------------------------------------------------
-  // Data access
-  // ---------------------------------------------------------------------
-
-  const buildPriceLookupMap = (customerId, hierarchyCustomerId, trandate, itemIds) => {
+  const buildPriceLookupMap = (customerId, hierarchyCustomerId, trandate, itemIds, currentTransactionId) => {
     log.debug({
       title: 'buildPriceLookupMap',
       details: { customerId, hierarchyCustomerId, trandate, itemIds }
@@ -147,8 +137,39 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       return {};
     }
 
-    // NOTE: keeping the exact same query shape/interpolation style as the
-    // working version - only the customform column selection is fixed.
+    let excludeCurrentTransactionSql = '';
+    let currentTrxPrepaidJoin = '';
+    let currentTrxPrepaidSelect = `CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.custcol_abj_qty_usage ELSE NULL END AS so_qty_usage`;
+
+    if (currentTransactionId) {
+      const trxIdNum = Number(currentTransactionId);
+      
+      // 1. Exclude untuk Postpaid (Historical Usage)
+      excludeCurrentTransactionSql = ` AND t.id != ${trxIdNum} `;
+      
+      // 2. Kalkulasi "Refund" kuota untuk Prepaid berdasarkan line SO
+      currentTrxPrepaidJoin = `
+        LEFT JOIN (
+          SELECT
+            tl.custcol_abj_order_line,
+            SUM(ABS(tl.quantity)) AS current_trx_usage
+          FROM transactionline tl
+          WHERE tl.transaction = ${trxIdNum}
+            AND tl.custcol_abj_order_line IS NOT NULL
+          GROUP BY tl.custcol_abj_order_line
+        ) current_prepaid_trx ON current_prepaid_trx.custcol_abj_order_line = sol.id
+      `;
+
+      // 3. Select untuk Prepaid: Kurangi usage di SO dengan usage dari transaksi ini
+      currentTrxPrepaidSelect = `
+        CASE 
+          WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN 
+            (COALESCE(sol.custcol_abj_qty_usage, 0) - COALESCE(current_prepaid_trx.current_trx_usage, 0))
+          ELSE NULL 
+        END AS so_qty_usage
+      `;
+    }
+
     const suiteQL = `
       SELECT
         pl.id AS id,
@@ -169,13 +190,30 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         pl.${PRICE_LIST_FIELD_MAP.channelSegment} AS channel_segment,
         pl.${PRICE_LIST_FIELD_MAP.billingType} AS billing_type,
         pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} AS is_prepaid_or_postpaid,
+        pl.${PRICE_LIST_FIELD_MAP.priceLevel} AS price_level,
         BT.custrecord_abj_rev_rec_account AS billing_type_account,
-        CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.custcol_abj_dis_onetime_pcs ELSE NULL END AS so_one_time_discount_per_pcs,
-        CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.custcol_abj_qty_usage ELSE NULL END AS so_qty_usage,
+        CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 
+          THEN 
+            COALESCE(
+              sol.custcol_abj_dis_onetime_pcs, 
+              (sol.custcol_abj_one_time_discount / NULLIF(ABS(sol.quantity), 0))
+            )
+          ELSE 
+            NULL 
+          END 
+        AS so_one_time_discount_per_pcs,
+        ${currentTrxPrepaidSelect},
         CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.quantity ELSE NULL END AS so_qty,
         CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.transaction ELSE NULL END AS so_id,
         CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.so_trandate ELSE NULL END AS so_trandate,
-        CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.id ELSE NULL END AS so_line_id
+        CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 THEN sol.id ELSE NULL END AS so_line_id,
+        CASE 
+          WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 12 AND pl.${PRICE_LIST_FIELD_MAP.isTiering} = 'T'
+          THEN 
+            COALESCE(usage_trx.total_usage_qty, 0) 
+          ELSE 
+            NULL 
+        END AS used_quantity
       FROM
         ${PRICE_LIST_RECORD_TYPE} pl
         JOIN classification BT ON BT.id = pl.${PRICE_LIST_FIELD_MAP.billingType}
@@ -193,6 +231,28 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           AND sol.custcol_abj_id_price_list_line = pl.id
           AND sol.custcol_abj_privy_customer_hierarchy_ = pl.${PRICE_LIST_FIELD_MAP.hierarchyCustomer}
           AND pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13
+        ${currentTrxPrepaidJoin}
+        LEFT JOIN (
+          SELECT 
+            tl.item,
+            tl.custcol_abj_id_price_list_line,
+            tl.custcol_abj_privy_customer_hierarchy_,
+            SUM(tl.quantity) AS total_usage_qty 
+          FROM 
+            transactionline tl 
+            JOIN transaction t ON t.id = tl.transaction 
+          WHERE 
+            t.type = 'CuTrSale'
+            AND recordType = 'customsale_abj_usage_pre_postpaid'
+            ${excludeCurrentTransactionSql}
+          GROUP BY
+            tl.item,
+            tl.custcol_abj_id_price_list_line,
+            tl.custcol_abj_privy_customer_hierarchy_
+        ) usage_trx ON usage_trx.item = pl.custrecord_abj_item_price_list 
+        AND usage_trx.custcol_abj_id_price_list_line = pl.id 
+        AND usage_trx.custcol_abj_privy_customer_hierarchy_ = pl.custrecord_abj_cust_hierarchy
+        AND pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 12
       WHERE
         pl.${PRICE_LIST_FIELD_MAP.hierarchyCustomer} = '${escapedHierarchyCustomerId}'
         AND pl.${PRICE_LIST_FIELD_MAP.customer} = '${escapedCustomerId}'
@@ -213,24 +273,11 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
 
     log.debug('mappedResults', mappedResults);
 
-    // Group by item, then de-duplicate by price-list-bucket id: the LEFT JOIN
-    // to historical SO lines can return several rows for the same bucket
-    // (one per matching historical SO line). We only want ONE entry per
-    // bucket, holding the MOST RECENT custcol_abj_qty_usage value (since the
-    // query is already ordered by so_trandate ASC, the last time we see a
-    // given bucket id is the most up-to-date usage figure). Using a Map
-    // preserves the FIFO order (oldest/most-used bucket first) established by
-    // the ORDER BY, since Map.set() on an existing key keeps its original
-    // position and only refreshes the value.
     const bucketMapsByItem = {};
-
     
     mappedResults.forEach((result) => {
       const itemId = String(result.item_id);
       
-      // FIX: Gunakan ID Baris SO (so_line_id) sebagai pemisah bucket jika ada.
-      // Jika bukan prepaid (tidak ada so_line_id), kembali gunakan ID Price List.
-      // Menggabungkan SO ID dan SO Line ID agar benar-benar unik secara global
       const bucketId = (result.so_id && result.so_line_id) 
           ? 'SO_' + result.so_id + '_LINE_' + result.so_line_id 
           : 'PL_' + result.id;
@@ -255,41 +302,54 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
   // ---------------------------------------------------------------------
 
   const resolveAccumulatedTiering = (tiers, quantity) => {
+    log.debug('resolveAccumulatedTiering', { tiers , quantity});
     const sortedTiers = [...tiers].sort((a, b) => a.minimumQuantity - b.minimumQuantity);
 
-    let totalPrice = 0;
-    let discountPremium = 0;
+    let remainingQuantity = quantity;
+    const allocations = []; // FIX: return array of { matchedPrice, quantity }
 
     for (const tier of sortedTiers) {
+      if (remainingQuantity <= 0) break;
+
       const tierLowerBound = tier.minimumQuantity === 0 ? 0 : tier.minimumQuantity - 1;
       const tierUpperBound = tier.maximumQuantity ?? Infinity;
       const tierCapacity = tierUpperBound - tierLowerBound;
-      const qtyAboveMin = quantity - tierLowerBound;
 
-      if (qtyAboveMin > 0) {
-        const qtyInTier = Math.min(qtyAboveMin, tierCapacity);
-        totalPrice += qtyInTier * tier.finalPrice;
-        discountPremium += tier.discountOrPremium;
+      const usedQtyInThisTier = Math.abs(tier.usedQuantity || 0);
+      const availableCapacityInTier = Math.max(0, tierCapacity - usedQtyInThisTier);
+
+      if (availableCapacityInTier <= 0) continue;
+
+      const qtyInTier = Math.min(remainingQuantity, availableCapacityInTier);
+
+      if (qtyInTier > 0) {
+        allocations.push({
+          matchedPrice: tier, 
+          quantity: qtyInTier
+        });
+        remainingQuantity -= qtyInTier;
       }
     }
 
-    const averageUnitPrice = quantity > 0 ? totalPrice / quantity : 0;
-
-    return [{ finalPrice: averageUnitPrice, discountOrPremium: discountPremium, privyPriceListId: null }];
+    log.debug('accumulated allocations', allocations);
+    return allocations;
   };
 
   const resolveMatchedPrices = (priceListEntries, quantity) => {
     let matchedPrices = priceListEntries;
 
-    if (matchedPrices.length <= 1) {
-      return matchedPrices;
+    if (matchedPrices.length === 0) return [];
+    
+    // FIX: Kembalikan format seragam yaitu Array of Allocations: [{ matchedPrice, quantity }]
+    if (matchedPrices.length === 1 && matchedPrices[0].isAccumulatedTiering !== 1) {
+      return [{ matchedPrice: matchedPrices[0], quantity }];
     }
 
     const minAchievementPrice = matchedPrices.find(
       (price) => price.isMinAchievement === 1 && price.minimumAchievement !== null && quantity >= price.minimumAchievement
     );
     if (minAchievementPrice) {
-      matchedPrices = [minAchievementPrice];
+      return [{ matchedPrice: minAchievementPrice, quantity }];
     }
 
     const tieredPrice = matchedPrices.find(
@@ -302,31 +362,21 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         quantity <= price.maximumQuantity
     );
     if (tieredPrice) {
-      matchedPrices = [tieredPrice];
+      return [{ matchedPrice: tieredPrice, quantity }];
     }
 
+    // FIX: Tidak boleh difilter pakai `quantity >= price.minimumQuantity` karena fungsi resolveAccumulatedTiering yang akan menentukan batasnya berdasarkan `usedQuantity`
     const accumulatedTiers = matchedPrices.filter(
-      (price) =>
-        price.isTiering === 1 && price.isAccumulatedTiering === 1 && price.minimumQuantity !== null && quantity >= price.minimumQuantity
+      (price) => price.isTiering === 1 && price.isAccumulatedTiering === 1
     );
     if (accumulatedTiers.length > 0) {
-      matchedPrices = resolveAccumulatedTiering(accumulatedTiers, quantity);
+      // Langsung me-return hasil allocations dari accumulated tiers
+      return resolveAccumulatedTiering(accumulatedTiers, quantity);
     }
 
-    return matchedPrices;
+    return [{ matchedPrice: matchedPrices[0], quantity }];
   };
 
-  // ---------------------------------------------------------------------
-  // Prepaid FIFO bucket allocation
-  // ---------------------------------------------------------------------
-
-  /**
-   * Consumes prepaid buckets FIFO (in the order they're given, which already
-   * reflects the SQL's "already-used buckets first, unused buckets last"
-   * ordering) until `quantity` is fully allocated, or buckets run out.
-   *
-   * Remaining capacity per bucket = soQty - soQtyUsage.
-   */
   const resolvePrepaidAllocations = (prepaidBuckets, quantity) => {
     let remainingToAllocate = quantity;
     const allocations = [];
@@ -337,14 +387,14 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       }
 
       if (bucket.soQty === null) {
-        continue; // bucket has no defined capacity, can't be used for prepaid allocation
+        continue; 
       }
 
       const bucketUsed = bucket.soQtyUsage || 0;
       const bucketRemaining = Math.max(0, bucket.soQty - bucketUsed);
 
       if (bucketRemaining <= 0) {
-        continue; // bucket exhausted
+        continue; 
       }
 
       const qtyFromBucket = Math.min(bucketRemaining, remainingToAllocate);
@@ -355,23 +405,33 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     return { allocations, shortfall: remainingToAllocate };
   };
 
-  // ---------------------------------------------------------------------
-  // Sublist line helpers
-  // ---------------------------------------------------------------------
-
   const captureLineSnapshot = (transactionRecord, sublistId, line) => {
     let fieldIds = [];
     try {
       fieldIds = transactionRecord.getSublistFields({ sublistId });
     } catch (e) {
-      log.debug({ title: 'getSublistFields unavailable, using fallback field list', details: String(e) });
       fieldIds = ['item', 'description', 'location', 'department', 'units'];
     }
 
+    // Tambahkan field internal NetSuite yang DILARANG keras untuk disalin ke baris baru
+    const SYSTEM_FIELDS_TO_IGNORE = [
+      'line', 
+      'lineuniquekey', 
+      'sys_id', 
+      'id', 
+      'amount',
+      'grossamt',
+      'taxamount',
+      'tax1amt',
+      'cleared',
+      'matchbilltoreceipt'
+    ];
+
     const snapshot = {};
     fieldIds.forEach((fieldId) => {
-      if (PRICE_LIST_DRIVEN_FIELDS.includes(fieldId)) {
-        return; // these are always set explicitly per allocation, don't copy stale values
+      // Lewati field bawaan price list ATAU field internal/system
+      if (PRICE_LIST_DRIVEN_FIELDS.includes(fieldId) || SYSTEM_FIELDS_TO_IGNORE.includes(fieldId)) {
+        return; 
       }
       try {
         const value = transactionRecord.getSublistValue({ sublistId, fieldId, line });
@@ -379,7 +439,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           snapshot[fieldId] = value;
         }
       } catch (e) {
-        // field not readable in this context - skip silently
+        // Abaikan jika error saat mengambil getSublistValue
       }
     });
 
@@ -391,14 +451,15 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       try {
         transactionRecord.setSublistValue({ sublistId, fieldId, line, value: snapshot[fieldId] });
       } catch (e) {
-        log.debug({ title: 'Skip copying field on split line', details: { fieldId, error: String(e) } });
       }
     });
   };
 
   const applyPriceListValuesToLine = (transactionRecord, line, matchedPrice, allocatedQuantity) => {
     transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'quantity', line, value: allocatedQuantity });
-    transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'price', line, value: -1 });
+    if(matchedPrice.priceLevel !== null && matchedPrice.priceLevel !== undefined){
+      transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'price', line, value: matchedPrice.priceLevel });
+    }
 
     if (matchedPrice.privyPriceListId !== null && matchedPrice.privyPriceListId !== undefined) {
       transactionRecord.setSublistValue({
@@ -519,17 +580,14 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     }
   };
 
-  // ---------------------------------------------------------------------
-  // Main entry point
-  // ---------------------------------------------------------------------
-
   const applyPriceListToTransaction = ({ transactionRecord }) => {
     try {
       log.debug({ title: 'applyPriceListToTransaction', details: transactionRecord });
 
-      if (!transactionRecord) {
-        return;
-      }
+      if (!transactionRecord) return;
+
+      // Ambil ID transaksi yang sedang diedit (akan kosong/undefined jika ini mode Create)
+      const currentTransactionId = transactionRecord.id;
 
       const customerId = transactionRecord.getValue({ fieldId: CUSTOMER_FIELD_ID });
       const hierarchyCustomerId = transactionRecord.getValue({ fieldId: HIERARCHY_CUSTOMER_FIELD_ID });
@@ -537,10 +595,6 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       const formattedTranDate = formatDateForSuiteQL(trandateValue);
 
       if (!customerId || !hierarchyCustomerId || !formattedTranDate) {
-        log.debug({
-          title: 'Price list skipped',
-          details: 'Missing customer, hierarchy customer, or transaction date'
-        });
         return;
       }
 
@@ -559,7 +613,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       }
 
       const uniqueItemIds = [...new Set(itemIds.map((itemId) => String(itemId)))];
-      const priceLookupMap = buildPriceLookupMap(customerId, hierarchyCustomerId, formattedTranDate, uniqueItemIds);
+      const priceLookupMap = buildPriceLookupMap(customerId, hierarchyCustomerId, formattedTranDate, uniqueItemIds, currentTransactionId);
 
       log.debug({ title: 'Price Lookup Map', details: priceLookupMap });
 
@@ -567,8 +621,6 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         return;
       }
 
-      // Every matched price list entry must share the same revenue account /
-      // billing type, otherwise the transaction can't be saved as-is.
       let billingTypeAccount = null;
       let billingType = null;
 
@@ -590,7 +642,6 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       transactionRecord.setValue({ fieldId: 'account', value: billingTypeAccount });
       transactionRecord.setValue({ fieldId: 'class', value: billingType });
 
-      // ---- Pass 1: figure out what each line needs (no mutation yet) ----
       const linePlans = [];
 
       for (let line = 0; line < lineCount; line += 1) {
@@ -614,24 +665,20 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           const { allocations: prepaidAllocations, shortfall } = resolvePrepaidAllocations(prepaidEntries, quantity);
 
           if (shortfall > 0) {
-            // ASSUMPTION: if the combined remaining quota across all prepaid
-            // buckets can't cover the requested quantity, we block the save.
-            // Let me know if you'd rather fall back to postpaid/normal price
-            // for the uncovered remainder instead.
             throw error.create({
               name: 'PRICE_LIST_PREPAID_QUOTA_INSUFFICIENT',
-              message: `Transaksi gagal: Kuota prepaid untuk item pada baris ${line + 1} tidak mencukup. Kekurangan: ${shortfall}.`,
+              message: `Transaksi gagal: Kuota prepaid untuk item pada baris ${line + 1} tidak mencukupi. Kekurangan: ${shortfall}.`,
               notifyOff: true
             });
           }
 
           allocations = prepaidAllocations;
         } else {
-          const matchedPrices = resolveMatchedPrices(priceListEntries, quantity);
-          if (!matchedPrices || matchedPrices.length === 0) {
+          // FIX: Ambil seluruh hasil array allocations dari fungsi matchedPrices
+          allocations = resolveMatchedPrices(priceListEntries, quantity);
+          if (!allocations || allocations.length === 0) {
             continue;
           }
-          allocations = [{ matchedPrice: matchedPrices[0], quantity }];
         }
 
         linePlans.push({ line, allocations });
@@ -639,8 +686,6 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
 
       log.debug('line plans', linePlans);
 
-      // ---- Pass 2: apply plans back-to-front so inserted lines never shift
-      //      the index of a line we still need to process ----
       for (let i = linePlans.length - 1; i >= 0; i -= 1) {
         const { line, allocations } = linePlans[i];
 
@@ -649,35 +694,28 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           continue;
         }
 
-        // Needs splitting: snapshot the original line's other fields first.
         const snapshot = captureLineSnapshot(transactionRecord, ITEM_SUBLIST_ID, line);
         log.debug('snapshot', snapshot);
 
-        // First allocation reuses the original line.
         applyPriceListValuesToLine(transactionRecord, line, allocations[0].matchedPrice, allocations[0].quantity);
-
-        // Remaining allocations become new lines inserted right after.
+        log.debug('applyPriceListValuesToLine 1', 'applyPriceListValuesToLine 1');
         for (let allocationIndex = 1; allocationIndex < allocations.length; allocationIndex += 1) {
           const insertAt = line + allocationIndex;
-          log.debug('insert at', insertAt);
           transactionRecord.insertLine({ sublistId: ITEM_SUBLIST_ID, line: insertAt });
           applyLineSnapshot(transactionRecord, ITEM_SUBLIST_ID, insertAt, snapshot);
-          log.debug('applyLineSnapshot','applyLineSnapshot')
+          
           applyPriceListValuesToLine(
             transactionRecord,
             insertAt,
             allocations[allocationIndex].matchedPrice,
             allocations[allocationIndex].quantity
           );
-          log.debug('applyPriceListValuesToLine','applyPriceListValuesToLine')
         }
       }
       
     } catch (err) {
       log.error('error applyPriceListToTransaction', err);
 
-      // Business-rule validation errors must stop the save; only swallow
-      // unexpected/runtime errors so the transaction can still save gracefully.
       if (err && (err.name === 'PRICE_LIST_ACCOUNT_MISMATCH' || err.name === 'PRICE_LIST_PREPAID_QUOTA_INSUFFICIENT')) {
         throw err;
       }
