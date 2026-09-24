@@ -29,44 +29,48 @@ define(['N/task', 'N/log', 'N/search'], (task, log, search) => {
         if (!APPROVAL_CONFIG[recType]) return;
         
         const config = APPROVAL_CONFIG[recType];
-        log.debug('Approval Config', `Record Type: ${recType}, Status Field: ${config.statusField}, Approved Value: ${config.approvedValue}`);
+        log.debug('Approval Config', `Record ID : ${recId}, Record Type: ${recType}, Status Field: ${config.statusField}, Approved Value: ${config.approvedValue}`);
 
         let oldStatus = null;
         if (oldRec) {
             oldStatus = oldRec.getValue({ fieldId: config.statusField }).toLowerCase().replaceAll(" ", "");
         }
 
-        let classId = rec.getValue({ fieldId : 'class'});
+        // let classId = rec.getValue({ fieldId : 'class'});
         let customForm = rec.getValue({ fieldId : 'customform'});
-        if(!classId) return;
-        let allowedClass = [];
+        // log.debug('class id', classId);
+        // if(!classId){
+        //     log.audit('ignored auto amort class is null', classId);
+        //     return;
+        // }
+        // let allowedClass = [];
         let allowedCustomForm = [
             "132", // Privy - Sales Order Prepaid
             "161", // Privy - Sales Order Postpaid Top Up
             "187" // Privy - Invoice (Payment Gateway)
         ];
-        const loadSearchClass = search.load({ id : 'customsearch_abj_billing_type_class'});
-        loadSearchClass.run().each(function(result) {
+        // const loadSearchClass = search.load({ id : 'customsearch_abj_billing_type_class'});
+        // loadSearchClass.run().each(function(result) {
             
-            allowedClass.push(result.id);
+        //     allowedClass.push(result.id);
             
-            // Option B: If you need a specific column value instead, use getValue:
-            // allowedClass.push(result.getValue({ name: 'column_name' }));
+        //     // Option B: If you need a specific column value instead, use getValue:
+        //     // allowedClass.push(result.getValue({ name: 'column_name' }));
             
-            return true; // Return true to continue iterating through all results
-        });
-        log.debug('allowedClass', allowedClass); 
-        if(!allowedClass.includes(classId)){
-            log.audit('ignored auto amort class', classId);
-            return;
-        }
+        //     return true; // Return true to continue iterating through all results
+        // });
+        // log.debug('allowedClass', allowedClass); 
+        // if(!allowedClass.includes(classId)){
+        //     log.audit('ignored auto amort class', classId);
+        //     return;
+        // }
         log.debug('allowedCustomForm', allowedCustomForm); 
         if(!allowedCustomForm.includes(customForm)){
             log.audit('ignored auto amort customform', customForm);
             return;
         }
         
-        log.audit('allowed auto amort class', classId);
+        // log.audit('allowed auto amort class', classId);
         // return;
         
 
