@@ -264,10 +264,10 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             }
             const daysToAmortize = values.custcol_abj_days_to_amortize || 1;
             const billingType = values['class'].value;
-            // const startDate = values.custcol_abj_billing_start_date;
-            const startDate = values.custcol_abj_agreement_start_date;
-            // const endDate = values.custcol_abj_billing_end_date;
-            const endDate = values.custcol_abj_agreement_end_date;
+            const startDate = values.custcol_abj_billing_start_date;
+            // const startDate = values.custcol_abj_agreement_start_date;
+            const endDate = values.custcol_abj_billing_end_date;
+            // const endDate = values.custcol_abj_agreement_end_date;
             let nextDateString = '';
             if(startDate){
                 let startDateDate = typeof startDate === 'string' ? format.parse({ value: startDate, type: format.Type.DATE }) : new Date(startDate);
