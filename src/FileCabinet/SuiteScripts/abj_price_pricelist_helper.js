@@ -352,15 +352,25 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       return [{ matchedPrice: minAchievementPrice, quantity }];
     }
 
+    // tiering normal
     const tieredPrice = matchedPrices.find(
-      (price) =>
-        price.isTiering === 1 &&
-        price.isAccumulatedTiering !== 1 &&
-        price.minimumQuantity !== null &&
-        price.maximumQuantity !== null &&
-        quantity >= price.minimumQuantity &&
-        quantity <= price.maximumQuantity
+      (price) => {
+        if (
+          price.isTiering === 1 && 
+          price.isAccumulatedTiering !== 1 && 
+          price.minimumQuantity !== null
+        ) {
+          const usedQty = Math.abs(price.usedQuantity || 0);
+          const totalVolume = usedQty + quantity;
+          
+          const maxQty = price.maximumQuantity ?? Infinity;
+          
+          return totalVolume >= price.minimumQuantity && totalVolume <= maxQty;
+        }
+        return false;
+      }
     );
+
     if (tieredPrice) {
       return [{ matchedPrice: tieredPrice, quantity }];
     }
