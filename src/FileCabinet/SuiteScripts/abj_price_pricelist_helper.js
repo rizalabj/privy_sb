@@ -29,7 +29,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     applicationSegment: 'cseg_abj_applicatio',
     channelSegment: 'cseg_abj_channel_se',
     isPrepaidOrPostpaid: 'custrecord_abj_prepaid_postpaid',
-    priceLevel : 'custrecord_abj_pricing'
+    priceLevel : 'custrecord_abj_pricing',
+    approvalStatus: 'custrecord_abj_pricelist_approval_status'
   };
 
   const PREPAID_VALUE = 13;
@@ -231,6 +232,9 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           AND sol.custcol_abj_id_price_list_line = pl.id
           AND sol.custcol_abj_privy_customer_hierarchy_ = pl.${PRICE_LIST_FIELD_MAP.hierarchyCustomer}
           AND pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13
+          AND TO_DATE('${escapedDate}', 'YYYY-MM-DD')
+            BETWEEN sol.custcol_abj_billing_start_date
+            AND sol.custcol_abj_billing_end_date
         ${currentTrxPrepaidJoin}
         LEFT JOIN (
           SELECT 
@@ -257,6 +261,12 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         pl.${PRICE_LIST_FIELD_MAP.hierarchyCustomer} = '${escapedHierarchyCustomerId}'
         AND pl.${PRICE_LIST_FIELD_MAP.customer} = '${escapedCustomerId}'
         AND pl.isinactive = 'F'
+        AND pl.custrecord_abj_is_usage = 'T'
+        AND (
+          pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 12 AND pl.${PRICE_LIST_FIELD_MAP.approvalStatus} = 2
+          OR
+          pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} != 12
+        )
         AND TO_DATE('${escapedDate}', 'YYYY-MM-DD')
           BETWEEN pl.${PRICE_LIST_FIELD_MAP.startDate}
           AND pl.${PRICE_LIST_FIELD_MAP.endDate}
@@ -602,6 +612,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       const customerId = transactionRecord.getValue({ fieldId: CUSTOMER_FIELD_ID });
       const hierarchyCustomerId = transactionRecord.getValue({ fieldId: HIERARCHY_CUSTOMER_FIELD_ID });
       const trandateValue = transactionRecord.getValue({ fieldId: 'trandate' });
+      log.debug('trandateValue',trandateValue);
       const formattedTranDate = formatDateForSuiteQL(trandateValue);
 
       if (!customerId || !hierarchyCustomerId || !formattedTranDate) {
@@ -628,7 +639,11 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       log.debug({ title: 'Price Lookup Map', details: priceLookupMap });
 
       if (!priceLookupMap || Object.keys(priceLookupMap).length === 0) {
-        return;
+          throw error.create({
+              name: 'PRICE_LIST_NOT_FOUND',
+              message: 'Transaksi gagal: Pricelist tidak ditemukan sama sekali untuk item-item pada transaksi ini.',
+              notifyOff: true
+          });
       }
 
       let billingTypeAccount = null;
@@ -649,10 +664,11 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         });
       });
 
-      transactionRecord.setValue({ fieldId: 'account', value: billingTypeAccount });
+      // transactionRecord.setValue({ fieldId: 'account', value: billingTypeAccount });
       transactionRecord.setValue({ fieldId: 'class', value: billingType });
 
       const linePlans = [];
+      const warningMessages = [];
 
       for (let line = 0; line < lineCount; line += 1) {
         const itemId = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'item', line });
@@ -674,12 +690,16 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         if (prepaidEntries.length > 0) {
           const { allocations: prepaidAllocations, shortfall } = resolvePrepaidAllocations(prepaidEntries, quantity);
 
-          if (shortfall > 0) {
+          if (shortfall === quantity) {
+            // KONDISI 2: Kuota sudah terpakai semua (0) atau tidak memenuhi sama sekali -> ERROR
             throw error.create({
-              name: 'PRICE_LIST_PREPAID_QUOTA_INSUFFICIENT',
-              message: `Transaksi gagal: Kuota prepaid untuk item pada baris ${line + 1} tidak mencukupi. Kekurangan: ${shortfall}.`,
+              name: 'PRICE_LIST_PREPAID_QUOTA_EXHAUSTED',
+              message: `Transaksi gagal: Kuota prepaid untuk item ${itemId} (baris ${line + 1}) sudah habis/tidak mencukupi.`,
               notifyOff: true
             });
+          } else if (shortfall > 0) {
+            // KONDISI 3: Kuota terpakai sebagian, sisanya gagal -> LANJUT, TAPI CATAT WARNING
+            warningMessages.push(`Baris ${line + 1} (Item ${itemId}): Request Qty ${quantity}, Teralokasi ${quantity - shortfall}, Gagal/Kurang ${shortfall}.`);
           }
 
           allocations = prepaidAllocations;
@@ -687,7 +707,11 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           // FIX: Ambil seluruh hasil array allocations dari fungsi matchedPrices
           allocations = resolveMatchedPrices(priceListEntries, quantity);
           if (!allocations || allocations.length === 0) {
-            continue;
+             throw error.create({
+                name: 'PRICE_LIST_ALLOCATION_FAILED',
+                message: `Transaksi gagal: Alokasi harga tidak ditemukan untuk item ${itemId} (baris ${line + 1}).`,
+                notifyOff: true
+            });
           }
         }
 
@@ -695,6 +719,19 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       }
 
       log.debug('line plans', linePlans);
+
+      if (warningMessages.length > 0) {
+          log.audit('Pricelist Partial Fulfillment', warningMessages.join(' | '));
+          
+          // CONTOH: Simpan ke custom field (Pastikan ID field ini valid di NetSuite Anda)
+          // transactionRecord.setValue({ fieldId: 'custbody_pricelist_warnings', value: warningMessages.join('\n') });
+          
+          // CONTOH ALTERNATIF: Gabungkan ke memo
+          const currentMemo = transactionRecord.getValue({ fieldId: 'memo' }) || '';
+          const warningText = '[INFO PARSIAL QTY]\n' + warningMessages.join('\n');
+          transactionRecord.setValue({ fieldId: 'memo', value: currentMemo ? currentMemo + '\n\n' + warningText : warningText });
+      }
+      
 
       for (let i = linePlans.length - 1; i >= 0; i -= 1) {
         const { line, allocations } = linePlans[i];
@@ -722,13 +759,24 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           );
         }
       }
+
+      return { success: true, warnings: warningMessages };
       
     } catch (err) {
       log.error('error applyPriceListToTransaction', err);
 
-      if (err && (err.name === 'PRICE_LIST_ACCOUNT_MISMATCH' || err.name === 'PRICE_LIST_PREPAID_QUOTA_INSUFFICIENT')) {
+      // Pastikan custom error dilempar kembali agar menggagalkan submit dan me-return HTTP 400 di RESTlet
+      const handledErrors = [
+          'PRICE_LIST_ACCOUNT_MISMATCH', 
+          'PRICE_LIST_NOT_FOUND', 
+          'PRICE_LIST_PREPAID_QUOTA_EXHAUSTED',
+          'PRICE_LIST_ALLOCATION_FAILED'
+      ];
+
+      if (err && handledErrors.includes(err.name)) {
         throw err;
       }
+      throw err; // Lempar error generic lainnya
     }
   };
 

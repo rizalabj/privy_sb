@@ -25,7 +25,8 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         channelSegment,
         prepaidPostpaidSegment,
         classBillingType,
-        itemDescription
+        itemDescription,
+        entity  
     }) => {
         jeRec.selectNewLine({ sublistId: 'line' });
         if(debitAccount){
@@ -50,6 +51,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         if(prepaidPostpaidSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: prepaidPostpaidSegment });
         if(classBillingType) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'class', value: classBillingType });
         if(itemDescription) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'memo', value: itemDescription });
+        if(entity) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'entity', value: entity });
         jeRec.commitLine({ sublistId: 'line' });
     }
 
@@ -72,7 +74,10 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         channelSegment,
         prepaidPostpaidSegment,
         classBillingType,
-        itemDescription
+        itemDescription,
+        entity,
+        sumDiscounts,
+        approved
     }) =>{
         try {
             const jeRec = record.create({
@@ -82,7 +87,9 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
 
             // Set JE Header
             jeRec.setValue({ fieldId: 'customform', value: 183 }); // 2 = custom form
-            jeRec.setValue({ fieldId: 'approvalstatus', value: 2 }); // 2 = Approved
+            if(approved){
+                jeRec.setValue({ fieldId: 'approvalstatus', value: 2 }); // 2 = Approved
+            }
             if (startDate) {
                 jeRec.setValue({ 
                     fieldId: 'trandate', 
@@ -108,7 +115,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             setJournalLine({ 
                 jeRec : jeRec,
                 debitAccount : debitAccount,
-                amortAmount : amortAmount,
+                amortAmount : Number(amortAmount) - Number(sumDiscounts),
                 daysToAmortize : daysToAmortize,
                 trxId : trxId,
                 mainProductSegment : mainProductSegment,
@@ -121,8 +128,11 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 channelSegment : channelSegment,
                 prepaidPostpaidSegment : prepaidPostpaidSegment,
                 classBillingType : classBillingType,
-                itemDescription : itemDescription
+                itemDescription : itemDescription,
+                entity : entity
             });
+
+            
             
             // Add Credit Line
             setJournalLine({ 
@@ -141,8 +151,32 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 channelSegment : channelSegment,
                 prepaidPostpaidSegment : prepaidPostpaidSegment,
                 classBillingType : classBillingType,
-                itemDescription : itemDescription
+                itemDescription : itemDescription,
+                entity : entity
             });
+
+            // add discount line if sumDiscounts > 0 (Debit to debitAccount )
+            if(sumDiscounts && sumDiscounts > 0){
+                setJournalLine({ 
+                    jeRec : jeRec,
+                    debitAccount : debitAccount,
+                    amortAmount : Number(sumDiscounts),
+                    daysToAmortize : daysToAmortize,
+                    trxId : trxId,
+                    mainProductSegment : mainProductSegment,
+                    subProductSegment : subProductSegment,
+                    productSource : productSource,
+                    productTypeSegment : productTypeSegment,
+                    enterpriseSegment : enterpriseSegment,
+                    merchantSegment : merchantSegment,
+                    applicationSegment :applicationSegment,
+                    channelSegment : channelSegment,
+                    prepaidPostpaidSegment : prepaidPostpaidSegment,
+                    classBillingType : classBillingType,
+                    itemDescription : itemDescription,
+                    entity : entity
+                });
+            }
             
 
             const jeId = jeRec.save();
@@ -213,6 +247,37 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             return null;
         }
     }
+
+    const checkStartDate = (startDate) => {
+        if (!startDate) {
+            return false;
+        }
+
+        // 1. Dapatkan HARI INI spesifik di zona waktu Jakarta (Format: YYYY-MM-DD)
+        const jakartaFormatter = new Intl.DateTimeFormat('en-CA', { 
+            timeZone: 'Asia/Jakarta',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        });
+        const todayJakartaStr = jakartaFormatter.format(new Date()); 
+
+        // 2. Ubah input startDate menjadi Date Object (jika asalnya dari string)
+        const startDateObj = typeof startDate === 'string' 
+            ? format.parse({ value: startDate, type: format.Type.DATE }) 
+            : startDate;
+
+        // 3. Ekstrak YYYY-MM-DD dari startDate tanpa konversi zona waktu lagi!
+        // Gunakan method lokal Date agar tidak bergeser gara-gara offset NetSuite
+        const year = startDateObj.getFullYear();
+        const month = String(startDateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(startDateObj.getDate()).padStart(2, '0');
+        const startDateStr = `${year}-${month}-${day}`; 
+
+        // 4. Bandingkan string murni (contoh: "2026-10-05" <= "2026-10-06")
+        return startDateStr <= todayJakartaStr; 
+    }
+
     const getInputData = () => {
         // 1. Receive params rec id and rec type from Script Deployment parameters
         const scriptObj = runtime.getCurrentScript();
@@ -258,10 +323,15 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
 
             // Extract Line Values
             let amount = parseFloat(values.amount) || 0;
-            const totalAfterOneTimeDiscount = values.custcol_abj_total_after_1time_disc || 0;
-            if(totalAfterOneTimeDiscount && totalAfterOneTimeDiscount > 0){
-                amount = totalAfterOneTimeDiscount;
-            }
+            // const totalAfterOneTimeDiscount = values.custcol_abj_total_after_1time_disc || 0;
+            // if(totalAfterOneTimeDiscount && totalAfterOneTimeDiscount > 0){
+            //     amount = totalAfterOneTimeDiscount;
+            // }
+
+            let totalDiscoutPremium = Math.abs(parseFloat(values.custcol_abj_total_discount_premium) || 0);
+            let oneTimeDiscount = Math.abs(parseFloat(values.custcol_abj_one_time_discount) || 0);
+
+            let sumDiscounts = (Math.abs(totalDiscoutPremium) + Math.abs(oneTimeDiscount)) / daysToAmortize;
             const daysToAmortize = values.custcol_abj_days_to_amortize || 1;
             const billingType = values['class'].value;
             const startDate = values.custcol_abj_billing_start_date;
@@ -280,14 +350,11 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 log.debug('nextDateString',nextDateString);
 
             }
-        
             const pic= values.custbody2.value;
             let headerBillingType = values.class.value;
-
             const amortAmount = amount / daysToAmortize;
-            
             const debitAccount = values['custrecord_abj_rev_rec_account.class'].value;
-            const creditAccount = values['incomeaccount.item'].value;
+            const creditAccount = values['custitem_abj_income_usage_account.item'].value;
             const mainProductSegment = values['line.cseg_abj_main_prod'].value;
             const subProductSegment = values['line.cseg_abj_sub_prod'].value;
             const productSource = values['custcol_abj_product_source'].value;
@@ -299,10 +366,12 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             const prepaidPostpaidSegment = values['line.cseg_abj_billing_ty'].value;
             const classBillingType = billingType;
             const itemDescription = values.memo;
+            const entity = values.entity ? values.entity.value : null;
 
             headerBillingType = prepaidPostpaidSegment;
+            const approved = checkStartDate(startDate); // start date <= today, then approved, else pending approval. You can implement this logic based on your requirements.
 
-            log.debug('Processing Line', `SO: ${trxId} | Line: ${lineNum} | Amort Amount: ${amortAmount}`);
+            log.debug('Processing Line', `SO: ${trxId} | Line: ${lineNum} | Debit Amount: ${amortAmount}`);
 
             // 3. Create the Journal Entry
             const jeId = createJournalEntry({
@@ -325,7 +394,10 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 channelSegment,
                 prepaidPostpaidSegment,
                 classBillingType,
-                itemDescription
+                itemDescription,
+                entity,
+                sumDiscounts,
+                approved
             })
             log.debug('Journal Entry Created', `JE ID: ${jeId} for SO Line: ${lineNum}`);
 

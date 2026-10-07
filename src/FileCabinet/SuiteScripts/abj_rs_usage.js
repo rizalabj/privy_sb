@@ -2,7 +2,7 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
-define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime','N/search'], (record, integrationLogRecord, runtime, search) => {
+define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime','N/search','N/format'], (record, integrationLogRecord, runtime, search, format) => {
 
     const get = (context) => {
         return { message: 'GET request received', params: context };
@@ -23,7 +23,7 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
       return num;
     }
 
-    const generateResponse = ({statusParam, message, refNumber, id}) => {
+    const generateResponse = ({statusParam, message, refNumber, id, qtySucced, qtyFailed}) => {
         log.debug('status oparam', statusParam)
         let statusCode = statusParam ? 200 : 400;
         let status = statusParam ? "success" : "failed";
@@ -33,7 +33,9 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
             "message": message,
             "data": {
                 "ref_number": refNumber,
-                "internal_id" : id
+                "internal_id" : id,
+                "qty_succeed" : qtySucced,
+                "qty_failed" : qtyFailed,
             }
         }
     }
@@ -77,9 +79,27 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
         if(!dateString || dateString == undefined || dateString == null || dateString == ''){
             return '';
         }
-        const date = new Date(dateString);
-        log.debug('date', date);
-        return date;
+        var dateParts = dateString.split('-');
+        var year = parseInt(dateParts[0], 10);
+        var month = parseInt(dateParts[1], 10) - 1; // Index bulan di JavaScript dimulai dari 0 (Jan = 0, Okt = 9)
+        var day = parseInt(dateParts[2], 10);
+
+        var localDate = new Date(year, month, day);
+
+        return localDate;
+    }
+
+    function toJakarta(isoString) {
+      const dateOnly = isoString.split('T')[0];
+      const dateValue = new Date(
+          dateOnly + 'T00:00:00'
+      );
+
+      log.debug('dateValue', dateValue);
+      return format.parse({
+        value: dateValue,
+        type: format.Type.DATE
+      });
     }
 
     const createUsageRecord = (data) =>{
@@ -98,7 +118,7 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
             if(!data?.data?.customer_hierarchy_id){
                 return {
                     status: false,
-                    message: 'customer_hierarchy_id is requireds.',
+                    message: 'customer_hierarchy_id is required.',
                     id: null
                 }
             }
@@ -257,12 +277,33 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
 
         let usage = createUsageRecord(context);
         log.debug('usage', usage);
+        let qtyRequested = context?.data?.quantity;
+        let qtySucced = 0;
+        if(usage.status){
+            let loadRec = record.load({
+                type : 'customsale_abj_usage_pre_postpaid',
+                id : usage.id
+            });
+
+            let lineCount = loadRec.getLineCount({ sublistId : 'item' });
+
+            for (let index = 0; index < lineCount; index++) {
+                let qty = loadRec.getSublistValue({
+                    sublistId : 'item',
+                    fieldId : 'quantity',
+                    line : index
+                });
+                qtySucced = Number(qtySucced) + Number(qty);    
+            }
+        }
 
         let response = generateResponse({ 
             statusParam : usage.status, 
             message : usage.message,
             refNumber : context?.data?.ref_number,
-            id : usage.id
+            id : usage.id,
+            qtySucced : qtySucced,
+            qtyFailed : Number(qtyRequested) - Number(qtySucced)
         });
 
         var integrationLogRecordId = context.log_id || null;
