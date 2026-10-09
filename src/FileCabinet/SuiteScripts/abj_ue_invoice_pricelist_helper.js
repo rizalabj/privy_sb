@@ -445,16 +445,24 @@ define(['N/log', 'N/record','N/query'], (log, record, query) => {
       const itemData = [];
       for (let line = 0; line < lineCount; line += 1) {
         const itemId = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'item', line });
+        const itemType = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'itemtype', line });
         const customerHierarchyId = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'custcol_abj_privy_customer_hierarchy_', line });
         const quantity = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'quantity', line });
+        if (itemType === 'EndGroup' || itemType === 'Group') {
+          continue; 
+        }
         if (itemId) {
           itemData.push({
             itemId,
+            itemType,
             customerHierarchyId,
-            quantity
+            quantity,
+            line
           });
         }
       }
+
+      log.debug('itemData', itemData);
 
       const priceLookupMap = buildPriceLookupMap(customerId, formattedTranDate, itemData);
 
@@ -474,12 +482,20 @@ define(['N/log', 'N/record','N/query'], (log, record, query) => {
           continue;
         }
         allocations = [{ matchedPrice: matchedPrices[0], quantity : itmDt.quantity }];
-        linePlans.push({ line, allocations });
+        linePlans.push({ line: itmDt.line, allocations });
       }
       log.debug('line plans', linePlans);
 
       for (let i = linePlans.length - 1; i >= 0; i -= 1) {
         const { line, allocations } = linePlans[i];
+
+        const itemId = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'item', line });
+        const itemType = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'itemtype', line });
+
+        log.debug('processing line', { line, itemId, itemType, allocations });
+        if (itemType === 'EndGroup' || itemType === 'Group') {
+            continue; 
+        }
 
         if (allocations.length === 1) {
           applyPriceListValuesToLine(transactionRecord, line, allocations[0].matchedPrice, allocations[0].quantity);
