@@ -28,6 +28,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         itemDescription,
         entity  
     }) => {
+        log.debug('setJournalLine', `Processing JE Line for Transaction: ${trxId} | Debit: ${debitAccount} | Credit: ${creditAccount} | Amount: ${amortAmount}`);
         jeRec.selectNewLine({ sublistId: 'line' });
         if(debitAccount){
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: debitAccount });
@@ -110,12 +111,20 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             }
 
             
+            const roundedCreditAmt = Number(Number(amortAmount).toFixed(2));
+            
+            const roundedDiscountAmt = (sumDiscounts && sumDiscounts > 0) ? Number(Number(sumDiscounts).toFixed(2)) : 0;
+            
+            const roundedDebitAmt = Number((roundedCreditAmt - roundedDiscountAmt).toFixed(2));
+            
+
+            
 
             // Add Debit Line
             setJournalLine({ 
                 jeRec : jeRec,
                 debitAccount : debitAccount,
-                amortAmount : Number(amortAmount) - Number(sumDiscounts),
+                amortAmount : roundedDebitAmt,
                 daysToAmortize : daysToAmortize,
                 trxId : trxId,
                 mainProductSegment : mainProductSegment,
@@ -138,7 +147,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             setJournalLine({ 
                 jeRec : jeRec,
                 creditAccount : creditAccount,
-                amortAmount : amortAmount,
+                amortAmount : roundedCreditAmt,
                 daysToAmortize : daysToAmortize,
                 trxId : trxId,
                 mainProductSegment : mainProductSegment,
@@ -160,7 +169,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 setJournalLine({ 
                     jeRec : jeRec,
                     debitAccount : debitAccount,
-                    amortAmount : Number(sumDiscounts),
+                    amortAmount : roundedDiscountAmt,
                     daysToAmortize : daysToAmortize,
                     trxId : trxId,
                     mainProductSegment : mainProductSegment,
@@ -327,12 +336,12 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             // if(totalAfterOneTimeDiscount && totalAfterOneTimeDiscount > 0){
             //     amount = totalAfterOneTimeDiscount;
             // }
-
+            const daysToAmortize = values.custcol_abj_days_to_amortize || 1;
             let totalDiscoutPremium = Math.abs(parseFloat(values.custcol_abj_total_discount_premium) || 0);
             let oneTimeDiscount = Math.abs(parseFloat(values.custcol_abj_one_time_discount) || 0);
 
+            
             let sumDiscounts = (Math.abs(totalDiscoutPremium) + Math.abs(oneTimeDiscount)) / daysToAmortize;
-            const daysToAmortize = values.custcol_abj_days_to_amortize || 1;
             const billingType = values['class'].value;
             const startDate = values.custcol_abj_billing_start_date;
             // const startDate = values.custcol_abj_agreement_start_date;
