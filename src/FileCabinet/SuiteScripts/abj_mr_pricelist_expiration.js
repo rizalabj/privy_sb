@@ -55,6 +55,8 @@ define(['N/record', 'N/search', 'N/log', 'N/format'], (record, search, log, form
             setFieldValue(rec, 'custbody_abj_pg_order_id', orderId);
             setFieldValue(rec, 'custbody_abj_usage_ref_number', refNumber);
             setFieldValue(rec, 'currency', currencyId);
+            setFieldValue(rec, 'custbody_abj_usage_expired', true); // Menandai sebagai usage expired
+            setFieldValue(rec, 'memo', 'Usage Expired, item :'+itemId+''); // Menandai sebagai usage expired memo : 
 
             // Format tanggal dari saved search (formula {today} biasanya me-return string)
             if (trandate) {
