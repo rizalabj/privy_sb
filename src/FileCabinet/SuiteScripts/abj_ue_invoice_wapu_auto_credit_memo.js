@@ -221,14 +221,18 @@ define(['N/record','N/search'], (record, search) => {
             }
 
             if(Number(subTotal) <= 10000000 && customerHierarchyId){
-                let customerHierarchyLook = search.lookupFields({
-                    type : 'customrecord_abj_privy_cust_hierarchy',
-                    id : customerHierarchyId,
-                    columns : ['custrecord_abj_ppn_report']
-                });
-                log.debug('customerHierarchyLook', customerHierarchyLook);
-                if(customerHierarchyLook && customerHierarchyLook?.custrecord_abj_ppn_report[0].value == 1){
-                    isWapu = true;
+                try {
+                    let customerHierarchyLook = search.lookupFields({
+                        type : 'customrecord_abj_privy_cust_hierarchy',
+                        id : customerHierarchyId,
+                        columns : ['custrecord_abj_ppn_report']
+                    });
+                    log.debug('customerHierarchyLook', customerHierarchyLook);
+                    if(customerHierarchyLook && customerHierarchyLook?.custrecord_abj_ppn_report[0].value == 1){
+                        isWapu = true;
+                    }
+                } catch (error) {
+                    log.error('Error looking up customer hierarchy', error);
                 }
             }
 
