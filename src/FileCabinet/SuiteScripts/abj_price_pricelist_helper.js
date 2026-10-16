@@ -641,7 +641,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       if (!priceLookupMap || Object.keys(priceLookupMap).length === 0) {
           throw error.create({
               name: 'PRICE_LIST_NOT_FOUND',
-              message: 'Transaksi gagal: Pricelist tidak ditemukan sama sekali untuk item-item pada transaksi ini.',
+              message: 'Transaction failed: Pricelist not found at all for the items in this transaction.',
               notifyOff: true
           });
       }
@@ -655,7 +655,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             throw error.create({
               name: 'PRICE_LIST_ACCOUNT_MISMATCH',
               message:
-                'Transaksi gagal: Item yang dipilih memiliki tujuan Akun yang berbeda. Silakan pisahkan ke dalam transaksi terpisah.',
+                'Transaction failed: The selected items have different billing accounts. Please separate them into different transactions.',
               notifyOff: true
             });
           }
@@ -694,12 +694,12 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             // KONDISI 2: Kuota sudah terpakai semua (0) atau tidak memenuhi sama sekali -> ERROR
             throw error.create({
               name: 'PRICE_LIST_PREPAID_QUOTA_EXHAUSTED',
-              message: `Transaksi gagal: Kuota prepaid untuk item ${itemId} (baris ${line + 1}) sudah habis/tidak mencukupi.`,
+              message: `Transaction failed: Prepaid quota for item ${itemId} (line ${line + 1}) is exhausted/not sufficient.`,
               notifyOff: true
             });
           } else if (shortfall > 0) {
             // KONDISI 3: Kuota terpakai sebagian, sisanya gagal -> LANJUT, TAPI CATAT WARNING
-            warningMessages.push(`Baris ${line + 1} (Item ${itemId}): Request Qty ${quantity}, Teralokasi ${quantity - shortfall}, Gagal/Kurang ${shortfall}.`);
+            warningMessages.push(`Line ${line + 1} (Item ${itemId}): Request Qty ${quantity}, Allocated ${quantity - shortfall}, Failed/Short ${shortfall}.`);
           }
 
           allocations = prepaidAllocations;
@@ -709,7 +709,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           if (!allocations || allocations.length === 0) {
              throw error.create({
                 name: 'PRICE_LIST_ALLOCATION_FAILED',
-                message: `Transaksi gagal: Alokasi harga tidak ditemukan untuk item ${itemId} (baris ${line + 1}).`,
+                message: `Transaction failed: Price allocation not found for item ${itemId} (line ${line + 1}).`,
                 notifyOff: true
             });
           }
