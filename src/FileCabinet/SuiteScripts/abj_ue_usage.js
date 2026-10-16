@@ -21,6 +21,16 @@ define(['./abj_price_pricelist_helper', 'N/log', 'N/record'], (priceListHelper, 
       });
     } catch (error) {
       log.error({ title: 'abj_ue_usage beforeSubmit error', details: error });
+      const handledErrors = [
+          'PRICE_LIST_ACCOUNT_MISMATCH', 
+          'PRICE_LIST_NOT_FOUND', 
+          'PRICE_LIST_PREPAID_QUOTA_EXHAUSTED',
+          'PRICE_LIST_ALLOCATION_FAILED'
+      ];
+
+      if (error && handledErrors.includes(error.name)) {
+        throw error.message;
+      }
       throw error;
     }
   };
