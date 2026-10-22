@@ -2,358 +2,122 @@
  * @NApiVersion 2.1
  * @NScriptType UserEventScript
  */
-define(['N/task', 'N/log', 'N/search','N/record'], (task, log, search, record) => {
+define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) => {
     
     const APPROVAL_CONFIG = {
         'salesorder': {
-            statusField: 'status', // order status pending fulfillment
-            approvedValue : 'pendingbilling'
+            statusField: 'status',
+            approvedValue: 'pendingbilling'
         },
         'invoice': {
-            statusField: 'approvalstatus', // Ubah ke 'status' jika Invoice Anda tidak pakai approval routing
-            approvedValue: 2,               // Sesuaikan valuenya jika pakai field 'status'
+            statusField: 'approvalstatus',
+            approvedValue: 2
         }
     };
 
-    const setJournalLine = ({
-        jeRec,
-        account,
-        amount,
-        trxId,
-        mainProductSegment,
-        subProductSegment,
-        productSource,
-        productTypeSegment,
-        enterpriseSegment,
-        merchantSegment,
-        applicationSegment,
-        channelSegment,
-        prepaidPostpaidSegment,
-        classBillingType,
-        itemDescription,
-        entity,
-        lineSO,
-        lineJournal  
-    }) => {
-        log.debug('setJournalLine', `Processing JE Line for Transaction: ${trxId} | Account: ${account} | Amount: ${amount} | Item Desc : ${itemDescription}`);
-        jeRec.selectLine({ sublistId: 'line', line : lineJournal });
-        if(account){
+    const setJournalLine = (params) => {
+        const { jeRec, account, amount, lineJournal, itemDescription } = params;
+        log.debug('setJournalLine', `Processing JE Line for Transaction: ${params.trxId} | Account: ${account} | Amount: ${amount} | Item Desc : ${itemDescription}`);
+        
+        jeRec.selectLine({ sublistId: 'line', line: lineJournal });
+        if (account) {
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: account });
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit', value: amount });
         }
-        jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_link_transaction', value: trxId });
-        if(mainProductSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_main_prod', value: mainProductSegment });
-        if(subProductSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_sub_prod', value: subProductSegment });
-        if(productSource) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_product_source', value: productSource });
-        if(productTypeSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_prod_type', value: productTypeSegment });
-        if(enterpriseSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_enterprise', value: enterpriseSegment });
-        if(merchantSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_merchant', value: merchantSegment });
-        if(applicationSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_applicatio', value: applicationSegment });
-        if(channelSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_channel_se', value: channelSegment });
-        if(prepaidPostpaidSegment) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'cseg_abj_billing_ty', value: prepaidPostpaidSegment });
-        if(classBillingType) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'class', value: classBillingType });
-        if(itemDescription) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'memo', value: itemDescription });
-        if(entity) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'entity', value: entity });
-        if(lineSO) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_line_id_so', value: lineSO });
+        
+        const fieldMappings = {
+            'custcol_abj_link_transaction': params.trxId,
+            'cseg_abj_main_prod': params.mainProductSegment,
+            'cseg_abj_sub_prod': params.subProductSegment,
+            'custcol_abj_product_source': params.productSource,
+            'cseg_abj_prod_type': params.productTypeSegment,
+            'cseg_abj_enterprise': params.enterpriseSegment,
+            'cseg_abj_merchant': params.merchantSegment,
+            'cseg_abj_applicatio': params.applicationSegment,
+            'cseg_abj_channel_se': params.channelSegment,
+            'cseg_abj_billing_ty': params.prepaidPostpaidSegment,
+            'class': params.classBillingType,
+            'memo': itemDescription,
+            'entity': params.entity,
+            'custcol_abj_line_id_so': params.lineSO
+        };
+
+        for (const [fieldId, value] of Object.entries(fieldMappings)) {
+            if (value) jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId, value });
+        }
+        
         jeRec.commitLine({ sublistId: 'line' });
-    }
+    };
 
     const createReconJournalEntry = ({
-        jeRecId,
-        startDate,
-        pic,
-        headerBillingType,
-        approved,
-        lineItem,
-        discountItem,
-    }) =>{
+        jeRecId, startDate, pic, headerBillingType, approved, lineItem, discountItem
+    }) => {
         try {
-            var jeRec = null;
-            if(jeRecId){
-                jeRec = record.load({
-                    type: record.Type.JOURNAL_ENTRY,
-                    id : jeRecId,
-                    isDynamic: true
-                })
-            }else{
-                jeRec = record.create({
-                    type: record.Type.JOURNAL_ENTRY,
-                    isDynamic: true
-                });
-            }
+            let jeRec = jeRecId 
+                ? record.load({ type: record.Type.JOURNAL_ENTRY, id: jeRecId, isDynamic: true })
+                : record.create({ type: record.Type.JOURNAL_ENTRY, isDynamic: true });
 
             // Set JE Header
-            jeRec.setValue({ fieldId : 'customform', value : 30})
-            if(approved){
-                jeRec.setValue({ fieldId: 'approvalstatus', value: 2 }); // 2 = Approved
-            }
-            if (startDate) {
-                jeRec.setValue({ 
-                    fieldId: 'trandate', 
-                    value: startDate 
-                });
-            }
-            if(pic){
-                jeRec.setValue({ 
-                    fieldId: 'custbody2', 
-                    value: pic
-                });
-            }
-            if(headerBillingType){
-                jeRec.setValue({ 
-                    fieldId: 'cseg_abj_billing_ty', 
-                    value: headerBillingType 
-                });
-            }
-            if(lineItem[0].trxId){
-                jeRec.setValue({ 
-                    fieldId: 'custbody_abj_so_link', 
-                    value: lineItem[0].trxId 
-                });
-                
-            }
+            jeRec.setValue({ fieldId: 'customform', value: 30 });
+            if (approved) jeRec.setValue({ fieldId: 'approvalstatus', value: 2 }); // 2 = Approved
+            if (startDate) jeRec.setValue({ fieldId: 'trandate', value: startDate });
+            if (pic) jeRec.setValue({ fieldId: 'custbody2', value: pic });
+            if (headerBillingType) jeRec.setValue({ fieldId: 'cseg_abj_billing_ty', value: headerBillingType });
+            if (lineItem[0]?.trxId) jeRec.setValue({ fieldId: 'custbody_abj_so_link', value: lineItem[0].trxId });
 
+            const loadDiscountItem = record.load({ type: 'discountitem', id: discountItem[0].itemId });
+            let discountAccount = loadDiscountItem ? loadDiscountItem.getValue('account') : '';
             
-            // const roundedCreditAmt = Number(Number(amortAmount).toFixed(2));
-            
-            // const roundedDiscountAmt = (sumDiscounts && sumDiscounts > 0) ? Number(Number(sumDiscounts).toFixed(2)) : 0;
-            
-            // const roundedDebitAmt = Number((roundedCreditAmt - roundedDiscountAmt).toFixed(2));
-            
-            log.debug('discountItem[0].itemId', discountItem[0].itemId);
-
-            // let coaDiscount = search.lookupFields({
-            //     type: 'discountitem',
-            //     id: discountItem[0].itemId,
-            //     columns: ['account']
-            // });
-            const loadDiscountItem = record.load({
-                type : 'discountitem',
-                id : discountItem[0].itemId
-            });
-            let coaDiscount = '';
-            if(loadDiscountItem){
-                coaDiscount = loadDiscountItem.getValue('account');
-                log.debug('coaDiscount',coaDiscount)
-            }
-            let discountAccount = coaDiscount;
             let coaItems = search.create({
                 type: 'item',
-                filters: [
-                    ['internalid', 'anyof', lineItem.map(item => item.itemId)]
-                ],
+                filters: [['internalid', 'anyof', lineItem.map(item => item.itemId)]],
                 columns: ['custitem_abj_income_usage_account', 'incomeaccount']
             }).run().getRange({ start: 0, end: lineItem.length });
+            
             let itemAccounts = {};
             coaItems.forEach(item => {
-                const itemId = item.id;
-                const incomeAccount = item.getValue('incomeaccount');
-                const usageAccount = item.getValue('custitem_abj_income_usage_account');
-                itemAccounts[itemId] = {
-                    incomeAccount: incomeAccount,
-                    usageAccount: usageAccount
+                itemAccounts[item.id] = {
+                    incomeAccount: item.getValue('incomeaccount'),
+                    usageAccount: item.getValue('custitem_abj_income_usage_account')
                 };
             });
 
-            let defaultOrder = ['custitem_abj_income_usage_account', 'premiumdiscount','onetimediscount', 'incomeaccount'];
-
             let lineJournal = 0;
-            for(let i = 0; i < lineItem.length; i++){
-                const item = lineItem[i];
-                log.debug('item', item);
-                const itemId = item.itemId;
-                const itemAccount = itemAccounts[itemId];
-                const amount = item.publishedPrice * item.reconVariance * -1;
 
-                if(item.reconVariance < 0){
-                    setJournalLine({
-                        jeRec : jeRec, 
-                        account : itemAccount.usageAccount,
-                        amount : amount,
-                        trxId : item.trxId,
-                        mainProductSegment : item.mainProductSegment,
-                        subProductSegment : item.subProductSegment,
-                        productSource : item.productSource,
-                        productTypeSegment : item.productTypeSegment,
-                        enterpriseSegment : item.enterpriseSegment,
-                        merchantSegment : item.merchantSegment,
-                        applicationSegment :item.applicationSegment,
-                        channelSegment : item.channelSegment,
-                        prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                        classBillingType : item.classBillingType,
-                        itemDescription : item.itemDescription,
-                        entity : item.entity,
-                        lineSO : item.lineSO,
-                        lineJournal : lineJournal
-                    });
+            for (const item of lineItem) {
+                const itemAccount = itemAccounts[item.itemId];
+                const baseAmount = item.publishedPrice * item.reconVariance * -1;
+                const incomeAmount = item.rate * item.reconVariance;
+                
+                // Helper untuk men-generate line
+                const addLine = (account, amount, customDesc = item.itemDescription) => {
+                    setJournalLine({ ...item, jeRec, account, amount, itemDescription: customDesc, lineJournal });
                     lineJournal++;
-                    if(item.premiumDiscount != 0){
-                       setJournalLine({
-                            jeRec : jeRec, 
-                            account : discountAccount,
-                            amount : item.premiumDiscount * item.reconVariance,
-                            trxId : item.trxId,
-                            mainProductSegment : item.mainProductSegment,
-                            subProductSegment : item.subProductSegment,
-                            productSource : item.productSource,
-                            productTypeSegment : item.productTypeSegment,
-                            enterpriseSegment : item.enterpriseSegment,
-                            merchantSegment : item.merchantSegment,
-                            applicationSegment :item.applicationSegment,
-                            channelSegment : item.channelSegment,
-                            prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                            classBillingType : item.classBillingType,
-                            itemDescription : 'Premium Discount',
-                            entity : item.entity,
-                            lineSO : item.lineSO,
-                            lineJournal : lineJournal
-                        }); 
-                        lineJournal++;
-                    }
-                    if(item.oneTimeDiscount != 0){
-                       setJournalLine({
-                            jeRec : jeRec, 
-                            account : discountAccount,
-                            amount : item.oneTimeDiscount * item.reconVariance,
-                            trxId : item.trxId,
-                            mainProductSegment : item.mainProductSegment,
-                            subProductSegment : item.subProductSegment,
-                            productSource : item.productSource,
-                            productTypeSegment : item.productTypeSegment,
-                            enterpriseSegment : item.enterpriseSegment,
-                            merchantSegment : item.merchantSegment,
-                            applicationSegment :item.applicationSegment,
-                            channelSegment : item.channelSegment,
-                            prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                            classBillingType : item.classBillingType,
-                            itemDescription : 'One Time Discount',
-                            entity : item.entity,
-                            lineSO : item.lineSO,
-                            lineJournal : lineJournal
-                        }); 
-                        lineJournal++;
-                    }
-                    setJournalLine({
-                        jeRec : jeRec, 
-                        account : itemAccount.incomeAccount,
-                        amount : item.rate * item.reconVariance,
-                        trxId : item.trxId,
-                        mainProductSegment : item.mainProductSegment,
-                        subProductSegment : item.subProductSegment,
-                        productSource : item.productSource,
-                        productTypeSegment : item.productTypeSegment,
-                        enterpriseSegment : item.enterpriseSegment,
-                        merchantSegment : item.merchantSegment,
-                        applicationSegment :item.applicationSegment,
-                        channelSegment : item.channelSegment,
-                        prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                        classBillingType : item.classBillingType,
-                        itemDescription : item.itemDescription,
-                        entity : item.entity,
-                        lineSO : item.lineSO,
-                        lineJournal : lineJournal,
-                    });
-                    lineJournal++;
-                }else{
-                    setJournalLine({
-                        jeRec : jeRec, 
-                        account : itemAccount.incomeAccount,
-                        amount : item.rate * item.reconVariance,
-                        trxId : item.trxId,
-                        mainProductSegment : item.mainProductSegment,
-                        subProductSegment : item.subProductSegment,
-                        productSource : item.productSource,
-                        productTypeSegment : item.productTypeSegment,
-                        enterpriseSegment : item.enterpriseSegment,
-                        merchantSegment : item.merchantSegment,
-                        applicationSegment :item.applicationSegment,
-                        channelSegment : item.channelSegment,
-                        prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                        classBillingType : item.classBillingType,
-                        itemDescription : item.itemDescription,
-                        entity : item.entity,
-                        lineSO : item.lineSO,
-                        lineJournal : lineJournal,
-                    });
-                    lineJournal++;
-                    if(item.premiumDiscount != 0){
-                        setJournalLine({
-                            jeRec : jeRec, 
-                            account : discountAccount,
-                            amount : item.premiumDiscount * item.reconVariance,
-                            trxId : item.trxId,
-                            mainProductSegment : item.mainProductSegment,
-                            subProductSegment : item.subProductSegment,
-                            productSource : item.productSource,
-                            productTypeSegment : item.productTypeSegment,
-                            enterpriseSegment : item.enterpriseSegment,
-                            merchantSegment : item.merchantSegment,
-                            applicationSegment :item.applicationSegment,
-                            channelSegment : item.channelSegment,
-                            prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                            classBillingType : item.classBillingType,
-                            itemDescription : 'Premium Discount',
-                            entity : item.entity,
-                            lineSO : item.lineSO,
-                            lineJournal : lineJournal,
-                        }); 
-                        lineJournal++;
-                    }
-                    if(item.oneTimeDiscount != 0){
-                        setJournalLine({
-                            jeRec : jeRec, 
-                            account : discountAccount,
-                            amount : item.oneTimeDiscount * item.reconVariance,
-                            trxId : item.trxId,
-                            mainProductSegment : item.mainProductSegment,
-                            subProductSegment : item.subProductSegment,
-                            productSource : item.productSource,
-                            productTypeSegment : item.productTypeSegment,
-                            enterpriseSegment : item.enterpriseSegment,
-                            merchantSegment : item.merchantSegment,
-                            applicationSegment :item.applicationSegment,
-                            channelSegment : item.channelSegment,
-                            prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                            classBillingType : item.classBillingType,
-                            itemDescription : 'One Time Discount',
-                            entity : item.entity,
-                            lineSO : item.lineSO,
-                            lineJournal : lineJournal,
-                        });
-                        lineJournal++; 
-                    }
-                    setJournalLine({
-                        jeRec : jeRec, 
-                        account : itemAccount.usageAccount,
-                        amount : amount,
-                        trxId : item.trxId,
-                        mainProductSegment : item.mainProductSegment,
-                        subProductSegment : item.subProductSegment,
-                        productSource : item.productSource,
-                        productTypeSegment : item.productTypeSegment,
-                        enterpriseSegment : item.enterpriseSegment,
-                        merchantSegment : item.merchantSegment,
-                        applicationSegment :item.applicationSegment,
-                        channelSegment : item.channelSegment,
-                        prepaidPostpaidSegment : item.prepaidPostpaidSegment,
-                        classBillingType : item.classBillingType,
-                        itemDescription : item.itemDescription,
-                        entity : item.entity,
-                        lineSO : item.lineSO,
-                        lineJournal : lineJournal,
-                    });
-                    lineJournal++;
+                };
+
+                const linesToProcess = [];
+
+                if (item.reconVariance < 0) {
+                    linesToProcess.push({ account: itemAccount.usageAccount, amount: baseAmount });
+                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: item.premiumDiscount * item.reconVariance, desc: 'Premium Discount' });
+                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: item.oneTimeDiscount * item.reconVariance, desc: 'One Time Discount' });
+                    linesToProcess.push({ account: itemAccount.incomeAccount, amount: incomeAmount });
+                } else {
+                    linesToProcess.push({ account: itemAccount.incomeAccount, amount: incomeAmount });
+                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: item.premiumDiscount * item.reconVariance, desc: 'Premium Discount' });
+                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: item.oneTimeDiscount * item.reconVariance, desc: 'One Time Discount' });
+                    linesToProcess.push({ account: itemAccount.usageAccount, amount: baseAmount });
                 }
+
+                linesToProcess.forEach(line => addLine(line.account, line.amount, line.desc));
             }
 
-            const jeId = jeRec.save();
-
-            return jeId;
+            return jeRec.save();
         } catch (error) {
-            log.error('error create journal entry', error)
+            log.error('Error create journal entry', error);
             return null;
         }
-    }
+    };
 
     const afterSubmit = (context) => {
         log.debug('After Submit Type', context.type);
@@ -364,205 +128,118 @@ define(['N/task', 'N/log', 'N/search','N/record'], (task, log, search, record) =
         const recType = rec.type;
         const recId = rec.id;
 
-       
-
         if (!APPROVAL_CONFIG[recType]) return;
-        
         const config = APPROVAL_CONFIG[recType];
-        log.debug('Approval Config', `Record ID : ${recId}, Record Type: ${recType}, Status Field: ${config.statusField}, Approved Value: ${config.approvedValue}`);
-
-        let oldStatus = null;
-        if (oldRec) {
-            oldStatus = oldRec.getValue({ fieldId: config.statusField }).toLowerCase().replaceAll(" ", "");
-        }
-
-        // let classId = rec.getValue({ fieldId : 'class'});
-        let customForm = rec.getValue({ fieldId : 'customform'});
-
-        if(customForm == '112'){
-            // RECON JOURNAL
-            let lineItem = [];
-            let discountItem = [];
-            let entity =rec.getValue({ fieldId: 'entity'}); 
-            let lineCount = rec.getLineCount({ sublistId: 'item' });
-            for (let i = 0; i < lineCount; i++) {
-                let itemId = rec.getSublistValue({ sublistId: 'item', fieldId: 'item', line: i });
-                let itemText = rec.getSublistText({ sublistId: 'item', fieldId: 'item', line: i });
-
-                let itemType = rec.getSublistValue({ sublistId: 'item', fieldId: 'itemtype', line: i });
-                let rate = rec.getSublistValue({ sublistId: 'item', fieldId: 'rate', line: i });
-                let publishedPrice = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_published_price', line: i });
-                let qty = rec.getSublistValue({ sublistId: 'item', fieldId: 'quantity', line: i });
-                let reconVariance = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_recon_variance', line: i });
-                let premiumDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_discount_premium', line: i });
-                let oneTimeDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_dis_onetime_pcs', line: i });
-                let mainProductSegment = rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_main_prod', line: i });
-                let subProductSegment = rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_sub_prod', line: i });
-                let productSource = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_product_source', line: i });
-                let productTypeSegment = rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_prod_type', line: i });
-                let enterpriseSegment = rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_enterprise', line: i });
-                let merchantSegment = rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_merchant', line: i });
-                let applicationSegment =rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_applicatio', line: i });
-                let channelSegment =rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_channel_se', line: i }); 
-                let prepaidPostpaidSegment =rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_billing_ty', line: i }); 
-                let classBillingType =rec.getSublistValue({ sublistId: 'item', fieldId: 'class', line: i }); 
-                let itemDescription =rec.getSublistValue({ sublistId: 'item', fieldId: 'memo', line: i });
-                
-                let lineSO =rec.getSublistValue({ sublistId: 'item', fieldId: 'line', line: i }); 
-
-                if(itemType == 'Discount'){
-                    discountItem.push({
-                        itemId : itemId,
-                        rate : rate,
-                        publishedPrice : publishedPrice,
-                        qty : qty,
-                        reconVariance : reconVariance,
-                        premiumDiscount : premiumDiscount ? Math.abs(premiumDiscount) : '',
-                        oneTimeDiscount : premiumDiscount ? Math.abs(oneTimeDiscount) : '',
-                        trxId : recId,
-                        mainProductSegment : mainProductSegment,
-                        subProductSegment : subProductSegment,
-                        productSource : productSource,
-                        productTypeSegment : productTypeSegment,
-                        enterpriseSegment : enterpriseSegment,
-                        merchantSegment : merchantSegment,
-                        applicationSegment :applicationSegment,
-                        channelSegment : channelSegment,
-                        prepaidPostpaidSegment : prepaidPostpaidSegment,
-                        classBillingType : classBillingType,
-                        itemDescription : `${itemText} -  Reconciliation`,
-                        entity : entity,
-                        lineSO : lineSO
-                    });
-                }else{
-                   lineItem.push({
-                        itemId : itemId,
-                        rate : rate,
-                        publishedPrice : publishedPrice,
-                        qty : qty,
-                        reconVariance : reconVariance,
-                        premiumDiscount : premiumDiscount ? Math.abs(premiumDiscount) : '',
-                        oneTimeDiscount : premiumDiscount ? Math.abs(oneTimeDiscount) : '',
-                        trxId : recId,
-                        mainProductSegment : mainProductSegment,
-                        subProductSegment : subProductSegment,
-                        productSource : productSource,
-                        productTypeSegment : productTypeSegment,
-                        enterpriseSegment : enterpriseSegment,
-                        merchantSegment : merchantSegment,
-                        applicationSegment :applicationSegment,
-                        channelSegment : channelSegment,
-                        prepaidPostpaidSegment : prepaidPostpaidSegment,
-                        classBillingType : classBillingType,
-                        itemDescription : `${itemText} -  Reconciliation`,
-                        entity : entity,
-                        lineSO : lineSO
-                    }); 
-                }
-            }
-            const reconJournalEntry = createReconJournalEntry({
-                jeRecId : rec.getValue({ fieldId : 'custbody_abj_je_link'}),
-                startDate : rec.getValue({ fieldId : 'trandate'}),
-                pic : rec.getValue({ fieldId : 'custbody2'}),
-                headerBillingType : rec.getValue({ fieldId : 'cseg_abj_billing_ty'}),
-                approved : (rec.getValue({ fieldId : config.statusField}) == config.approvedValue),
-                lineItem : lineItem,
-                discountItem : discountItem
-            })
-            log.debug('reconJournalEntry', reconJournalEntry);
-            
-            record.submitFields({
-                type: recType,
-                id: recId,
-                values: {
-                    custbody_abj_je_link: reconJournalEntry
-                }
-            });
-            return;
-
-        }
-        // log.debug('class id', classId);
-        // if(!classId){
-        //     log.audit('ignored auto amort class is null', classId);
-        //     return;
-        // }
-        // let allowedClass = [];
-        let allowedCustomForm = [
-            "132", // Privy - Sales Order Prepaid
-            "161", // Privy - Sales Order Postpaid Top Up
-            "187" // Privy - Invoice (Payment Gateway)
-        ];
-        // const loadSearchClass = search.load({ id : 'customsearch_abj_billing_type_class'});
-        // loadSearchClass.run().each(function(result) {
-            
-        //     allowedClass.push(result.id);
-            
-        //     // Option B: If you need a specific column value instead, use getValue:
-        //     // allowedClass.push(result.getValue({ name: 'column_name' }));
-            
-        //     return true; // Return true to continue iterating through all results
-        // });
-        // log.debug('allowedClass', allowedClass); 
-        // if(!allowedClass.includes(classId)){
-        //     log.audit('ignored auto amort class', classId);
-        //     return;
-        // }
-        log.debug('allowedCustomForm', allowedCustomForm); 
-        if(!allowedCustomForm.includes(customForm)){
-            log.audit('ignored auto amort customform', customForm);
-            return;
-        }
         
-        // log.audit('allowed auto amort class', classId);
-        // return;
-        
-
+        let customForm = rec.getValue({ fieldId: 'customform' });
+        let oldStatus = oldRec ? oldRec.getValue({ fieldId: config.statusField })?.toString().toLowerCase().replaceAll(" ", "") : null;
         let newDbStatus = null;
 
+        // Sentralisasi Lookup Status
         try {
-            const lookup = search.lookupFields({
-                type: recType,
-                id: recId,
-                columns: [config.statusField]
-            });
-            log.debug('Status', `Lookup Result: ${JSON.stringify(lookup)}`);
-            
-
+            const lookup = search.lookupFields({ type: recType, id: recId, columns: [config.statusField] });
             const rawDbValue = lookup[config.statusField];
-            if (Array.isArray(rawDbValue) && rawDbValue.length > 0) {
-                newDbStatus = rawDbValue[0].value?.toLowerCase().replaceAll(" ", "");
-            } else {
-                newDbStatus = rawDbValue?.toLowerCase().replaceAll(" ", "");
-            }
+            newDbStatus = Array.isArray(rawDbValue) && rawDbValue.length > 0 
+                ? rawDbValue[0].value?.toString().toLowerCase().replaceAll(" ", "") 
+                : rawDbValue?.toString().toLowerCase().replaceAll(" ", "");
         } catch (e) {
             log.error('Lookup Status Error', e);
-            newDbStatus = rec.getValue({ fieldId: config.statusField })?.toLowerCase().replaceAll(" ", "");
+            newDbStatus = rec.getValue({ fieldId: config.statusField })?.toString().toLowerCase().replaceAll(" ", "");
         }
 
-        log.debug('old status', oldStatus);
-        log.debug('new status', newDbStatus);
+        const approvedVal = config.approvedValue.toString().toLowerCase().replaceAll(" ", "");
+        const isNowApproved = (newDbStatus === approvedVal);
+        const justApproved = isNowApproved && (newDbStatus !== oldStatus);
 
-        let approved = (newDbStatus == config.approvedValue) && (newDbStatus != oldStatus);
-        log.debug('approved', approved);
-        if (approved) {
+        log.debug('Approval Status Details', `Old: ${oldStatus} | New: ${newDbStatus} | IsApproved: ${isNowApproved}`);
+
+        // LOGIKA RECON JOURNAL (Custom Form 112)
+        if (customForm == '112') {
+            if (!isNowApproved) {
+                log.audit('Skipping Recon JE', `Transaction ${recId} is not approved yet.`);
+                return;
+            }
+
+            let lineItem = [];
+            let discountItem = [];
+            let entity = rec.getValue({ fieldId: 'entity' }); 
+            let lineCount = rec.getLineCount({ sublistId: 'item' });
+            
+            for (let i = 0; i < lineCount; i++) {
+                let itemType = rec.getSublistValue({ sublistId: 'item', fieldId: 'itemtype', line: i });
+                let premiumDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_discount_premium', line: i });
+                let oneTimeDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_dis_onetime_pcs', line: i });
+                let itemText = rec.getSublistText({ sublistId: 'item', fieldId: 'item', line: i });
+
+                let lineData = {
+                    itemId: rec.getSublistValue({ sublistId: 'item', fieldId: 'item', line: i }),
+                    rate: rec.getSublistValue({ sublistId: 'item', fieldId: 'rate', line: i }),
+                    publishedPrice: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_published_price', line: i }),
+                    qty: rec.getSublistValue({ sublistId: 'item', fieldId: 'quantity', line: i }),
+                    reconVariance: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_recon_variance', line: i }),
+                    premiumDiscount: premiumDiscount ? Math.abs(premiumDiscount) : '',
+                    oneTimeDiscount: oneTimeDiscount ? Math.abs(oneTimeDiscount) : '',
+                    trxId: recId,
+                    mainProductSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_main_prod', line: i }),
+                    subProductSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_sub_prod', line: i }),
+                    productSource: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_product_source', line: i }),
+                    productTypeSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_prod_type', line: i }),
+                    enterpriseSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_enterprise', line: i }),
+                    merchantSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_merchant', line: i }),
+                    applicationSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_applicatio', line: i }),
+                    channelSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_channel_se', line: i }), 
+                    prepaidPostpaidSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_billing_ty', line: i }), 
+                    classBillingType: rec.getSublistValue({ sublistId: 'item', fieldId: 'class', line: i }), 
+                    itemDescription: `${itemText} - Reconciliation`,
+                    entity: entity,
+                    lineSO: rec.getSublistValue({ sublistId: 'item', fieldId: 'line', line: i })
+                };
+
+                if (itemType === 'Discount') {
+                    discountItem.push(lineData);
+                } else {
+                    lineItem.push(lineData);
+                }
+            }
+
+            const reconJournalEntry = createReconJournalEntry({
+                jeRecId: rec.getValue({ fieldId: 'custbody_abj_je_link' }),
+                startDate: rec.getValue({ fieldId: 'trandate' }),
+                pic: rec.getValue({ fieldId: 'custbody2' }),
+                headerBillingType: rec.getValue({ fieldId: 'cseg_abj_billing_ty' }),
+                approved: isNowApproved,
+                lineItem: lineItem,
+                discountItem: discountItem
+            });
+            
+            if (reconJournalEntry) {
+                record.submitFields({
+                    type: recType,
+                    id: recId,
+                    values: { custbody_abj_je_link: reconJournalEntry }
+                });
+            }
+            return;
+        }
+
+        // LOGIKA MAP/REDUCE (Custom Form lainnya)
+        const allowedCustomForm = ["132", "161", "187"];
+        if (!allowedCustomForm.includes(customForm)) {
+            log.audit('Ignored Auto Amort CustomForm', customForm);
+            return;
+        }
+
+        if (justApproved) {
             try {
                 const mrTask = task.create({
                     taskType: task.TaskType.MAP_REDUCE,
                     scriptId: 'customscript_abj_mr_trx_auto_create_je',
-                    // deploymentId: 'customdeploy_my_mr_process',
-                    params: {
-                        custscript_abj_rec_id: recId
-                    }
+                    params: { custscript_abj_rec_id: recId }
                 });
-
                 const taskId = mrTask.submit();
                 log.audit('Map/Reduce Triggered', `Task ID: ${taskId} | Record ID: ${recId}`);
-
             } catch (error) {
-                log.error({
-                    title: `Failed to trigger Map/Reduce for ID: ${recId}`,
-                    details: error
-                });
+                log.error({ title: `Failed to trigger Map/Reduce for ID: ${recId}`, details: error });
             }
         }
     };
