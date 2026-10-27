@@ -43,7 +43,6 @@ define(['N/record', 'N/search', 'N/log', 'N/format'], (record, search, log, form
         quantity
     }) => {
         try {
-            // Karena menggunakan setSublistValue, isDynamic false (Standard Mode) lebih cocok
             let rec = record.create({
                 type: 'customsale_abj_usage_pre_postpaid'
             });
@@ -55,10 +54,10 @@ define(['N/record', 'N/search', 'N/log', 'N/format'], (record, search, log, form
             setFieldValue(rec, 'custbody_abj_pg_order_id', orderId);
             setFieldValue(rec, 'custbody_abj_usage_ref_number', refNumber);
             setFieldValue(rec, 'currency', currencyId);
-            setFieldValue(rec, 'custbody_abj_usage_expired', true); // Menandai sebagai usage expired
-            setFieldValue(rec, 'memo', 'Usage Expired, item :'+itemId+''); // Menandai sebagai usage expired memo : 
+            setFieldValue(rec, 'custbody_abj_usage_expired', true);
+            setFieldValue(rec, 'memo', 'Usage Expired, item :'+itemId+'');
 
-            // Format tanggal dari saved search (formula {today} biasanya me-return string)
+            // Format tanggal
             if (trandate) {
                 const parsedDate = format.parse({ value: trandate, type: format.Type.DATE });
                 setFieldValue(rec, 'trandate', parsedDate);
@@ -103,7 +102,7 @@ define(['N/record', 'N/search', 'N/log', 'N/format'], (record, search, log, form
 
         if (count === 0) {
             log.audit('Status Execution', 'Nothing to execute');
-            return []; // Mengembalikan array kosong untuk menghentikan Map/Reduce dengan aman
+            return [];
         }
 
         log.audit('Status Execution', `Found ${count} record(s) to process.`);
@@ -113,38 +112,47 @@ define(['N/record', 'N/search', 'N/log', 'N/format'], (record, search, log, form
 
     /**
      * Fase map
+     * Membuat Usage Record per baris SO. Jika berhasil, lempar data baris ke Reduce.
      */
     const map = (context) => {
         try {
             const searchResult = JSON.parse(context.value);
             const values = searchResult.values;
-            log.debug('values', values);
+            const soId = searchResult.id;
             
-            // Mapping data berdasarkan struktur kolom dari pencarian Anda
             const mappedData = {
-                // Gunakan opsional chaining `?.[0]?.value` karena field List/Record me-return array object di Map/Reduce
                 customer: values.entity?.value || values.entity,
                 customerHierarchyConfigId: values.custbody_abj_id_cust_hierarchy_con?.value || values.custbody_abj_id_cust_hierarchy_con,
                 customerHierarchyId: values.custcol_abj_privy_customer_hierarchy_?.value || values.custcol_abj_privy_customer_hierarchy_,
                 currencyId: values.currency?.value || values.currency,
                 itemId: values.item?.value || values.item,
-                
-                // Formula field biasanya me-return nilai secara langsung
                 trandate: values.custcol_abj_billing_end_date,
                 quantity: values.formulanumeric,
-                
-                orderId: searchResult.id, // Internal ID Sales Order untuk orderId
-                refNumber: 'USG-EXP-' + searchResult.id // Modifikasi penamaan refNumber jika diperlukan
+                orderId: soId,
+                refNumber: 'USG-EXP-' + soId,
+                lineId: values.line
             };
 
-            // Validasi: pastikan item dan quantity tidak kosong
             if (mappedData.itemId && mappedData.quantity) {
-                context.write({
-                    key: searchResult.id,
-                    value: mappedData
-                });
+                // Eksekusi pembuatan usage langsung di Map (per line/baris)
+                const usageResult = createUsageRecord(mappedData);
+
+                if (usageResult.status) {
+                    log.audit('Usage Created', `Berhasil membuat Usage ID: ${usageResult.id} untuk SO ID: ${soId}, Line: ${mappedData.lineId}`);
+                    
+                    // Lempar SO ID sebagai key, dan data line yang perlu diupdate sebagai value ke reduce
+                    context.write({
+                        key: soId,
+                        value: {
+                            lineId: mappedData.lineId,
+                            quantity: mappedData.quantity
+                        }
+                    });
+                } else {
+                    log.error('Usage Creation Failed', `Gagal membuat Usage untuk SO ID: ${soId}, Line: ${mappedData.lineId}. Alasan: ${usageResult.message}`);
+                }
             } else {
-                log.debug('Map Skipped', `Data dilewati karena Item atau Quantity kosong. SO ID: ${searchResult.id}`);
+                log.debug('Map Skipped', `Data dilewati karena Item atau Quantity kosong. SO ID: ${soId}`);
             }
 
         } catch (e) {
@@ -154,23 +162,49 @@ define(['N/record', 'N/search', 'N/log', 'N/format'], (record, search, log, form
 
     /**
      * Fase reduce
+     * Meload SO sekali berdasarkan Key, melooping semua baris yang telah berhasil diproses di Map, mengupdate sublist, lalu Save.
      */
     const reduce = (context) => {
+        const soId = context.key;
+        
         try {
-            const data = JSON.parse(context.values[0]);
-            log.debug('Reduce Data', `Memproses Usage Record untuk SO ID: ${context.key} dengan data: ${JSON.stringify(data)}`);
+            // values berisi array dari object baris (line) dari fase Map yang memiliki Key SO ID yang sama
+            const linesToUpdate = context.values.map(val => JSON.parse(val));
+            log.debug('Reduce Data', `Memproses Update SO ID: ${soId} untuk ${linesToUpdate.length} baris.`);
             
-            // Eksekusi pembuatan record
-            const result = createUsageRecord(data);
+            const soRec = record.load({
+                type: 'salesorder',
+                id: soId
+            });
+            
+            let lineCount = soRec.getLineCount({ sublistId: 'item'});
+            let isUpdated = false;
 
-            if (result.status) {
-                log.audit('Success', `Usage Record dibuat dengan ID: ${result.id} (Referensi SO ID: ${context.key})`);
-            } else {
-                log.error('Creation Failed', `Gagal membuat Usage untuk SO ID: ${context.key}. Alasan: ${result.message}`);
+            // Loop untuk setiap baris yang dilempar dari Map
+            linesToUpdate.forEach(data => {
+                for (let index = 0; index < lineCount; index++) {
+                    let currentLineId = soRec.getSublistValue({ fieldId: 'line', sublistId: 'item', line: index });
+                    
+                    if (currentLineId == data.lineId) {
+                        soRec.setSublistValue({ 
+                            fieldId: 'custcol_abj_qty_expired', 
+                            sublistId: 'item', 
+                            line: index, 
+                            value: data.quantity
+                        });
+                        isUpdated = true;
+                    }        
+                }
+            });
+
+            // Hanya save SO jika ada baris yang diubah
+            if (isUpdated) {
+                let updatedSOId = soRec.save();
+                log.audit('Success', `SO UPDATED: ${updatedSOId} dengan sukses.`);
             }
 
         } catch (e) {
-            log.error('Reduce Error - Key: ' + context.key, e.message);
+            log.error('Reduce Error - SO ID: ' + soId, e.message);
         }
     };
 
