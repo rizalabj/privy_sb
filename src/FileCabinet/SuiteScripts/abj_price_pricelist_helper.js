@@ -30,7 +30,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     channelSegment: 'cseg_abj_channel_se',
     isPrepaidOrPostpaid: 'custrecord_abj_prepaid_postpaid',
     priceLevel : 'custrecord_abj_pricing',
-    approvalStatus: 'custrecord_abj_pricelist_approval_status'
+    approvalStatus: 'custrecord_abj_pricelist_approval_status',
+    tieringPeriod: 'custrecord_abj_price_period_reset'
   };
 
   const PREPAID_VALUE = 13;
@@ -116,8 +117,27 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     soQtyUsage: toNumberOrNull(result.so_qty_usage),
     soQty : Math.abs(toNumberOrNull(result.so_qty)),
     priceLevel : result.price_level,
-    usedQuantity : Math.abs(result.used_quantity)
+    usedQuantity : Math.abs(result.used_quantity),
+    tieringPeriod : result.tiering_period
   });
+
+  function logLongString(title, longString) {
+    if (!longString) return;
+    
+    // Convert objects to strings manually if necessary
+    var str = (typeof longString === 'object') ? JSON.stringify(longString) : String(longString);
+    var chunkSize = 3900; // Keep safely under the 3999 limit
+    
+    for (var i = 0; i < str.length; i += chunkSize) {
+        var chunkNum = Math.floor(i / chunkSize) + 1;
+        var totalChunks = Math.ceil(str.length / chunkSize);
+        
+        log.debug({
+            title: title + ' [Part ' + chunkNum + '/' + totalChunks + ']',
+            details: str.substring(i, i + chunkSize)
+        });
+    }
+  }
 
   const buildPriceLookupMap = (customerId, hierarchyCustomerId, trandate, itemIds, currentTransactionId) => {
     log.debug({
@@ -192,6 +212,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         pl.${PRICE_LIST_FIELD_MAP.billingType} AS billing_type,
         pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} AS is_prepaid_or_postpaid,
         pl.${PRICE_LIST_FIELD_MAP.priceLevel} AS price_level,
+        pl.${PRICE_LIST_FIELD_MAP.tieringPeriod} AS tiering_period,
         BT.custrecord_abj_rev_rec_account AS billing_type_account,
         CASE WHEN pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 13 
           THEN 
@@ -241,7 +262,9 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             tl.item,
             tl.custcol_abj_id_price_list_line,
             tl.custcol_abj_privy_customer_hierarchy_,
-            SUM(tl.quantity) AS total_usage_qty 
+            SUM(tl.quantity) AS total_usage_qty,
+            TRUNC(t.trandate, 'MM') AS usage_month,
+            TRUNC(t.trandate, 'YYYY') AS usage_year
           FROM 
             transactionline tl 
             JOIN transaction t ON t.id = tl.transaction 
@@ -252,11 +275,24 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           GROUP BY
             tl.item,
             tl.custcol_abj_id_price_list_line,
-            tl.custcol_abj_privy_customer_hierarchy_
+            tl.custcol_abj_privy_customer_hierarchy_,
+            TRUNC(t.trandate, 'MM'),
+            TRUNC(t.trandate, 'YYYY')
         ) usage_trx ON usage_trx.item = pl.custrecord_abj_item_price_list 
         AND usage_trx.custcol_abj_id_price_list_line = pl.id 
         AND usage_trx.custcol_abj_privy_customer_hierarchy_ = pl.custrecord_abj_cust_hierarchy
         AND pl.${PRICE_LIST_FIELD_MAP.isPrepaidOrPostpaid} = 12
+        AND (
+          (
+            pl.${PRICE_LIST_FIELD_MAP.tieringPeriod} = 1 
+            AND usage_trx.usage_month = TRUNC(TO_DATE('${escapedDate}', 'YYYY-MM-DD'), 'MM')
+          )
+          OR
+          (
+            pl.${PRICE_LIST_FIELD_MAP.tieringPeriod} = 2 
+            AND usage_trx.usage_year = TRUNC(TO_DATE('${escapedDate}', 'YYYY-MM-DD'), 'YYYY')
+          )
+        )
       WHERE
         pl.${PRICE_LIST_FIELD_MAP.hierarchyCustomer} = '${escapedHierarchyCustomerId}'
         AND pl.${PRICE_LIST_FIELD_MAP.customer} = '${escapedCustomerId}'
@@ -276,8 +312,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         sol.transaction ASC NULLS LAST
     `;
 
-    log.debug({ title: 'Price List Query', details: suiteQL });
-
+    // log.debug({ title: 'Price List Query', details: suiteQL });
+    logLongString('Price List Query', suiteQL);
     const resultSet = query.runSuiteQL({ query: suiteQL });
     const mappedResults = resultSet.asMappedResults();
 
@@ -345,56 +381,84 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     return allocations;
   };
 
+  const resolveNormalTiering = (tiers, quantity) => {
+    const sortedTiers = [...tiers].sort((a, b) => a.minimumQuantity - b.minimumQuantity);
+    
+    let selectedTier = null;
+    let isFullyCovered = false;
+
+    
+    for (const price of sortedTiers) {
+      const usedQty = Math.abs(price.usedQuantity || 0);
+      const totalVolume = usedQty + quantity;
+      const maxQty = price.maximumQuantity ?? Infinity;
+
+      if (totalVolume >= price.minimumQuantity && totalVolume <= maxQty) {
+        selectedTier = price;
+        isFullyCovered = true;
+        break; 
+      }
+    }
+
+    if (!isFullyCovered) {
+      selectedTier = sortedTiers[sortedTiers.length - 1];
+      
+      const usedQty = Math.abs(selectedTier.usedQuantity || 0);
+      const maxQty = selectedTier.maximumQuantity ?? Infinity;
+      
+      const availableQuotaInTier = Math.max(0, maxQty - usedQty);
+      const qtyToProcess = Math.min(quantity, availableQuotaInTier);
+      const shortfall = quantity - qtyToProcess;
+
+      log.debug('normal tiered allocation (mentok/shortfall)', { matchedPrice: selectedTier, quantity: qtyToProcess, shortfall });
+      
+      return { allocations: [{ matchedPrice: selectedTier, quantity: qtyToProcess }], shortfall };
+    } else {
+      log.debug('normal tiered allocation (full cover)', { matchedPrice: selectedTier, quantity });
+      
+      return { allocations: [{ matchedPrice: selectedTier, quantity }], shortfall: 0 };
+    }
+  };
+
   const resolveMatchedPrices = (priceListEntries, quantity) => {
     let matchedPrices = priceListEntries;
 
-    if (matchedPrices.length === 0) return [];
+    if (matchedPrices.length == 0) return { allocations: [], shortfall: quantity };
     
-    // FIX: Kembalikan format seragam yaitu Array of Allocations: [{ matchedPrice, quantity }]
-    if (matchedPrices.length === 1 && matchedPrices[0].isAccumulatedTiering !== 1) {
-      return [{ matchedPrice: matchedPrices[0], quantity }];
+    if (matchedPrices.length == 1 && matchedPrices[0].isTiering != 1 && matchedPrices[0].isAccumulatedTiering != 1) {
+      return { allocations: [{ matchedPrice: matchedPrices[0], quantity }], shortfall: 0 };
     }
 
     const minAchievementPrice = matchedPrices.find(
-      (price) => price.isMinAchievement === 1 && price.minimumAchievement !== null && quantity >= price.minimumAchievement
+      (price) => price.isMinAchievement == 1 && price.minimumAchievement != null && quantity >= price.minimumAchievement && price.isTiering != 1 && price.isAccumulatedTiering != 1
     );
+    
     if (minAchievementPrice) {
-      return [{ matchedPrice: minAchievementPrice, quantity }];
+      return { allocations: [{ matchedPrice: minAchievementPrice, quantity }], shortfall: 0 };
     }
 
-    // tiering normal
-    const tieredPrice = matchedPrices.find(
-      (price) => {
-        if (
-          price.isTiering === 1 && 
-          price.isAccumulatedTiering !== 1 && 
-          price.minimumQuantity !== null
-        ) {
-          const usedQty = Math.abs(price.usedQuantity || 0);
-          const totalVolume = usedQty + quantity;
-          
-          const maxQty = price.maximumQuantity ?? Infinity;
-          
-          return totalVolume >= price.minimumQuantity && totalVolume <= maxQty;
-        }
-        return false;
-      }
+    // --- NORMAL TIERING ---
+    const normalTiers = matchedPrices.filter(
+      (price) => price.isTiering == 1 && price.isAccumulatedTiering != 1 && price.minimumQuantity != null
     );
 
-    if (tieredPrice) {
-      return [{ matchedPrice: tieredPrice, quantity }];
+    if (normalTiers.length > 0) {
+      return resolveNormalTiering(normalTiers, quantity);
     }
 
-    // FIX: Tidak boleh difilter pakai `quantity >= price.minimumQuantity` karena fungsi resolveAccumulatedTiering yang akan menentukan batasnya berdasarkan `usedQuantity`
+    // --- ACCUMULATED TIERING (Hitung Total Allocated vs Quantity) ---
     const accumulatedTiers = matchedPrices.filter(
-      (price) => price.isTiering === 1 && price.isAccumulatedTiering === 1
+      (price) => price.isTiering == 1 && price.isAccumulatedTiering == 1
     );
+    
     if (accumulatedTiers.length > 0) {
-      // Langsung me-return hasil allocations dari accumulated tiers
-      return resolveAccumulatedTiering(accumulatedTiers, quantity);
+      const accumulatedAllocations = resolveAccumulatedTiering(accumulatedTiers, quantity);
+      const totalAllocated = accumulatedAllocations.reduce((sum, alloc) => sum + alloc.quantity, 0);
+      const shortfall = quantity - totalAllocated;
+      return { allocations: accumulatedAllocations, shortfall };
     }
 
-    return [{ matchedPrice: matchedPrices[0], quantity }];
+    return { allocations: [{ matchedPrice: matchedPrices[0], quantity }], shortfall: 0 };
   };
 
   const resolvePrepaidAllocations = (prepaidBuckets, quantity) => {
@@ -704,15 +768,20 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
 
           allocations = prepaidAllocations;
         } else {
-          // FIX: Ambil seluruh hasil array allocations dari fungsi matchedPrices
-          allocations = resolveMatchedPrices(priceListEntries, quantity);
-          if (!allocations || allocations.length === 0) {
-             throw error.create({
+          const { allocations: matchedAllocations, shortfall } = resolveMatchedPrices(priceListEntries, quantity);
+          
+          if (!matchedAllocations || matchedAllocations.length === 0 || shortfall === quantity) {
+            throw error.create({
                 name: 'PRICE_LIST_ALLOCATION_FAILED',
-                message: `Transaction failed: Price allocation not found for item ${itemId} (line ${line + 1}).`,
+                message: `Transaction failed: Price allocation not found or quota exhausted for item ${itemId} (line ${line + 1}).`,
                 notifyOff: true
             });
+          } else if (shortfall > 0) {
+            // Tulis warning jika ada kuota harga normal/tiering yang kurang
+            warningMessages.push(`Line ${line + 1} (Item ${itemId}): Request Qty ${quantity}, Allocated ${quantity - shortfall}, Failed/Short ${shortfall}.`);
           }
+
+          allocations = matchedAllocations;
         }
 
         linePlans.push({ line, allocations });
