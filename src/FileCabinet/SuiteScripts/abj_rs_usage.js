@@ -69,10 +69,10 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
 
         log.debug('search customer', lookupCust);
         if (!lookupCust && lookupCust.custrecord_abj_customer_link) {
-           return false;
+            return lookupCust.custrecord_abj_customer_link[0].value;
         }
-
-        return lookupCust.custrecord_abj_customer_link[0].value;
+        
+        return false;
     }
 
     let formatDate = (dateString) =>{
