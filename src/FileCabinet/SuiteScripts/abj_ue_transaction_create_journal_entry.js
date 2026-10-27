@@ -87,9 +87,11 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
             for (const item of lineItem) {
                 const itemAccount = itemAccounts[item.itemId];
                 const baseAmount = item.publishedPrice * item.reconVariance * -1;
-                const incomeAmount = item.rate * item.reconVariance;
+                const premiumDiscountAmount = item.premiumDiscount * item.reconVariance;
+                const oneTimeDiscountAmount = item.oneTimeDiscount * item.reconVariance;
+                // const incomeAmount = item.rate * item.reconVariance;
+                const incomeAmount = (baseAmount + premiumDiscountAmount + oneTimeDiscountAmount) * -1;
                 
-                // Helper untuk men-generate line
                 const addLine = (account, amount, customDesc = item.itemDescription) => {
                     setJournalLine({ ...item, jeRec, account, amount, itemDescription: customDesc, lineJournal });
                     lineJournal++;
@@ -99,13 +101,13 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
                 if (item.reconVariance < 0) {
                     linesToProcess.push({ account: itemAccount.usageAccount, amount: baseAmount });
-                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: item.premiumDiscount * item.reconVariance, desc: 'Premium Discount' });
-                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: item.oneTimeDiscount * item.reconVariance, desc: 'One Time Discount' });
+                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: premiumDiscountAmount, desc: 'Premium Discount' });
+                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: oneTimeDiscountAmount, desc: 'One Time Discount' });
                     linesToProcess.push({ account: itemAccount.incomeAccount, amount: incomeAmount });
                 } else {
                     linesToProcess.push({ account: itemAccount.incomeAccount, amount: incomeAmount });
-                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: item.premiumDiscount * item.reconVariance, desc: 'Premium Discount' });
-                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: item.oneTimeDiscount * item.reconVariance, desc: 'One Time Discount' });
+                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: premiumDiscountAmount, desc: 'Premium Discount' });
+                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: oneTimeDiscountAmount, desc: 'One Time Discount' });
                     linesToProcess.push({ account: itemAccount.usageAccount, amount: baseAmount });
                 }
 
@@ -135,7 +137,6 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         let oldStatus = oldRec ? oldRec.getValue({ fieldId: config.statusField })?.toString().toLowerCase().replaceAll(" ", "") : null;
         let newDbStatus = null;
 
-        // Sentralisasi Lookup Status
         try {
             const lookup = search.lookupFields({ type: recType, id: recId, columns: [config.statusField] });
             const rawDbValue = lookup[config.statusField];
@@ -153,7 +154,7 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
         log.debug('Approval Status Details', `Old: ${oldStatus} | New: ${newDbStatus} | IsApproved: ${isNowApproved}`);
 
-        // LOGIKA RECON JOURNAL (Custom Form 112)
+        // RECON JOURNAL (Custom Form 112)
         if (customForm == '112') {
             if (!isNowApproved) {
                 log.audit('Skipping Recon JE', `Transaction ${recId} is not approved yet.`);
@@ -222,7 +223,7 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
             return;
         }
 
-        // LOGIKA MAP/REDUCE (Custom Form lainnya)
+        // JOURNAL AMORT : MAP/REDUCE
         const allowedCustomForm = ["132", "161", "187"];
         if (!allowedCustomForm.includes(customForm)) {
             log.audit('Ignored Auto Amort CustomForm', customForm);
