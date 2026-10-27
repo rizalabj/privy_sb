@@ -4,10 +4,7 @@
  */
 define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runtime, format) => {
 
-    // 5. SO - Jurnal Amortization   segment di line jurnal diset, segment2 nya  : 
-    // Main Product Segment, Sub Product Segment, Product Type Segment, Enterprise Segment, 
-    // Merchant Segment, Application Segment, Channel Segment, Prepaid/Postpaid Segment, 
-    // Class/Billing Type, dan Item Description ke memo line di jurnal
+    // https://8113915-sb1.app.netsuite.com/app/accounting/transactions/journal.nl?id=18976360&whence=
     const setJournalLine = ({
         jeRec,
         debitAccount,
@@ -32,11 +29,11 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         jeRec.selectNewLine({ sublistId: 'line' });
         if(debitAccount){
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: debitAccount });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit', value: amortAmount });
+            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'debit', value: Math.abs(amortAmount)});
         }
         if(creditAccount){
             jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'account', value: creditAccount });
-            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit', value: amortAmount });
+            jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'credit', value: Math.abs(amortAmount)});
         }
         jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_link_transaction', value: trxId });
         jeRec.setCurrentSublistValue({ sublistId: 'line', fieldId: 'custcol_abj_days_to_amortize', value: (Number(daysToAmortize) - 1) });
@@ -62,9 +59,10 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         headerBillingType,
         debitAccount,
         amortAmount,
+        creditAccount,
+        discountAccount,
         trxId,
         daysToAmortize,
-        creditAccount,
         mainProductSegment,
         subProductSegment,
         productSource,
@@ -111,16 +109,16 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             }
 
             
-            const roundedCreditAmt = Number(Number(amortAmount).toFixed(2));
+            const roundedCreditAmt = Math.abs(Number(amortAmount).toFixed(2));
             
-            const roundedDiscountAmt = (sumDiscounts && sumDiscounts > 0) ? Number(Number(sumDiscounts).toFixed(2)) : 0;
+            const roundedDiscountAmt = (sumDiscounts && sumDiscounts > 0) ? Math.abs(Number(sumDiscounts).toFixed(2)) : 0;
             
-            const roundedDebitAmt = Number((roundedCreditAmt - roundedDiscountAmt).toFixed(2));
-            
-
+            const roundedDebitAmt = Math.abs((roundedCreditAmt - roundedDiscountAmt).toFixed(2));
             
 
-            // Add Debit Line
+            
+
+            // Add Credit Line
             setJournalLine({ 
                 jeRec : jeRec,
                 debitAccount : debitAccount,
@@ -141,6 +139,28 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 entity : entity
             });
 
+            // add discount line if sumDiscounts > 0 (Debit to debitAccount )
+            if(sumDiscounts && sumDiscounts > 0){
+                setJournalLine({ 
+                    jeRec : jeRec,
+                    debitAccount : discountAccount,
+                    amortAmount : roundedDiscountAmt,
+                    daysToAmortize : daysToAmortize,
+                    trxId : trxId,
+                    mainProductSegment : mainProductSegment,
+                    subProductSegment : subProductSegment,
+                    productSource : productSource,
+                    productTypeSegment : productTypeSegment,
+                    enterpriseSegment : enterpriseSegment,
+                    merchantSegment : merchantSegment,
+                    applicationSegment :applicationSegment,
+                    channelSegment : channelSegment,
+                    prepaidPostpaidSegment : prepaidPostpaidSegment,
+                    classBillingType : classBillingType,
+                    itemDescription : itemDescription,
+                    entity : entity
+                });
+            }
             
             
             // Add Credit Line
@@ -164,28 +184,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 entity : entity
             });
 
-            // add discount line if sumDiscounts > 0 (Debit to debitAccount )
-            if(sumDiscounts && sumDiscounts > 0){
-                setJournalLine({ 
-                    jeRec : jeRec,
-                    debitAccount : debitAccount,
-                    amortAmount : roundedDiscountAmt,
-                    daysToAmortize : daysToAmortize,
-                    trxId : trxId,
-                    mainProductSegment : mainProductSegment,
-                    subProductSegment : subProductSegment,
-                    productSource : productSource,
-                    productTypeSegment : productTypeSegment,
-                    enterpriseSegment : enterpriseSegment,
-                    merchantSegment : merchantSegment,
-                    applicationSegment :applicationSegment,
-                    channelSegment : channelSegment,
-                    prepaidPostpaidSegment : prepaidPostpaidSegment,
-                    classBillingType : classBillingType,
-                    itemDescription : itemDescription,
-                    entity : entity
-                });
-            }
+            
             
 
             const jeId = jeRec.save();
@@ -364,6 +363,13 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             const amortAmount = amount / daysToAmortize;
             const debitAccount = values['custrecord_abj_rev_rec_account.class'].value;
             const creditAccount = values['custitem_abj_income_usage_account.item'].value;
+            let discountAccount;
+            if(sumDiscounts){
+                let lookUpFieldDiscountItem = search.lookupFields({ type: 'item', id: 473, columns: ['incomeaccount'] })
+                if(lookUpFieldDiscountItem && lookUpFieldDiscountItem.incomeaccount[0].value){
+                    discountAccount = lookUpFieldDiscountItem.incomeaccount[0].value;
+                }
+            }
             const mainProductSegment = values['line.cseg_abj_main_prod'].value;
             const subProductSegment = values['line.cseg_abj_sub_prod'].value;
             const productSource = values['custcol_abj_product_source'].value;
@@ -387,9 +393,10 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
                 startDate,
                 amortAmount,
                 billingType,
-                creditAccount,
-                daysToAmortize,
                 debitAccount,
+                creditAccount,
+                discountAccount,
+                daysToAmortize,
                 headerBillingType,
                 pic,
                 trxId,
