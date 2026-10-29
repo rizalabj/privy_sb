@@ -224,7 +224,7 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         }
 
         // JOURNAL AMORT : MAP/REDUCE
-        const allowedCustomForm = ["132", "161", "187"];
+        const allowedCustomForm = ["132", "161", "187", "189"];
         if (!allowedCustomForm.includes(customForm)) {
             log.audit('Ignored Auto Amort CustomForm', customForm);
             return;
