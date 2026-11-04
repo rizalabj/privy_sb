@@ -297,13 +297,13 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         });
 
         // Field Navigasi & Hidden
-        form.addField({ id: 'custpage_page_size', type: serverWidget.FieldType.TEXT, label: 'Data per Halaman' }).defaultValue = pageSize.toString();
-        let pageSelect = form.addField({ id: 'custpage_page_select', type: serverWidget.FieldType.SELECT, label: 'Pilih Halaman' });
+        form.addField({ id: 'custpage_page_size', type: serverWidget.FieldType.TEXT, label: 'Rows per Page' }).defaultValue = pageSize.toString();
+        let pageSelect = form.addField({ id: 'custpage_page_select', type: serverWidget.FieldType.SELECT, label: 'Select Page' });
         for (let i = 1; i <= totalPages; i++) {
             pageSelect.addSelectOption({ value: i, text: `Page ${i}`, isSelected: (i === pageId) });
         }
-        form.addField({ id: 'custpage_total_records', type: serverWidget.FieldType.TEXT, label: 'Total Data' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).updateBreakType({ breakType: serverWidget.FieldBreakType.STARTCOL }).defaultValue = totalRecords.toString();
-        form.addField({ id: 'custpage_total_records_on_this_page', type: serverWidget.FieldType.TEXT, label: 'Total Data Match di Halaman Ini' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).defaultValue = countMatchedOnThisPage.toString();
+        form.addField({ id: 'custpage_total_records', type: serverWidget.FieldType.TEXT, label: 'Total Records' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).updateBreakType({ breakType: serverWidget.FieldBreakType.STARTCOL }).defaultValue = totalRecords.toString();
+        form.addField({ id: 'custpage_total_records_on_this_page', type: serverWidget.FieldType.TEXT, label: 'Total Matched Records on This Page' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).defaultValue = countMatchedOnThisPage.toString();
         form.addField({ id: 'custpage_file_id', type: serverWidget.FieldType.TEXT, label: 'File ID' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = fileId;
         form.addField({ id: 'custpage_bank', type: serverWidget.FieldType.TEXT, label: 'Bank' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = bankAccount;
         form.addField({ id: 'custpage_method', type: serverWidget.FieldType.TEXT, label: 'Method' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = paymentMethod;
@@ -416,7 +416,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
 
         } catch (e) {
             log.error('Error Submitting Map/Reduce', e.message);
-            response.write(`Gagal memulai proses Map/Reduce: ${e.message}`);
+            response.write(`Failed to submit Map/Reduce task: ${e.message}`);
         }
     };
 
@@ -424,34 +424,45 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         const { request, response } = context;
         let taskId = request.parameters.taskId;
 
-        let form = serverWidget.createForm({ title: 'Task Status - Rekonsiliasi Jurnal' });
+        // Mengubah judul agar lebih natural
+        let form = serverWidget.createForm({ title: 'Journal Reconciliation - Process Status' });
 
         if (!taskId) {
             form.addField({ id: 'custpage_err_msg', type: serverWidget.FieldType.INLINEHTML, label: 'Error' })
-                .defaultValue = '<p>Error: Task ID tidak ditemukan.</p>';
+                .defaultValue = '<p>Error: Unable to find the process reference. Please try uploading your file again.</p>';
             response.writePage(form);
             return;
         }
 
         // Cek status Map/Reduce menggunakan N/task
         let taskStatus = task.checkStatus({ taskId: taskId });
-        let statusTeks = taskStatus.status; // Akan berisi: PENDING, PROCESSING, COMPLETE, atau FAILED
+        let rawStatus = taskStatus.status; // PENDING, PROCESSING, COMPLETE, or FAILED
 
-        // Styling indikator warna berdasarkan status
+        // Mapping status teknis ke bahasa yang lebih user-friendly
+        let displayStatus = 'Waiting in Queue'; 
         let colorCode = '#eab308'; // Default: Kuning (Pending/Processing)
-        if (statusTeks === 'COMPLETE') colorCode = '#22c55e'; // Hijau
-        else if (statusTeks === 'FAILED') colorCode = '#ef4444'; // Merah
 
+        if (rawStatus === 'PROCESSING') {
+            displayStatus = 'In Progress';
+        } else if (rawStatus === 'COMPLETE') {
+            displayStatus = 'Completed Successfully';
+            colorCode = '#22c55e'; // Hijau
+        } else if (rawStatus === 'FAILED') {
+            displayStatus = 'Process Failed';
+            colorCode = '#ef4444'; // Merah
+        }
+
+        // HTML Content dengan bahasa Inggris yang ramah pengguna
         let htmlContent = `
             <div style="font-family: Arial, sans-serif; padding: 15px; border: 1px solid #ccc; background-color: #f9fafb; border-radius: 5px; width: 50%;">
-                <p style="font-size: 14px; margin-bottom: 10px;"><b>Task ID:</b> ${taskId}</p>
-                <p style="font-size: 16px;"><b>Status Saat Ini:</b> 
+                <p style="font-size: 14px; margin-bottom: 10px;"><b>Reference ID:</b> ${taskId}</p>
+                <p style="font-size: 16px;"><b>Current Status:</b> 
                     <span style="color: ${colorCode}; font-weight: bold; background-color: white; padding: 4px 10px; border: 1px solid ${colorCode}; border-radius: 4px; margin-left: 10px;">
-                        ${statusTeks}
+                        ${displayStatus}
                     </span>
                 </p>
                 <p style="font-size: 12px; color: #6b7280; margin-top: 15px;">
-                    * Silakan klik tombol <b>Refresh Status</b> di bawah untuk memperbarui status terbaru.
+                    * Please click the <b>Refresh Status</b> button below to check for the latest updates.
                 </p>
             </div>
         `;
@@ -478,9 +489,9 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         // Tambahkan Tombol UI
         form.addButton({ id: 'custpage_btn_refresh', label: 'Refresh Status', functionName: 'refreshPage' });
         
-        // Hanya tampilkan tombol "Upload Baru" jika prosesnya sudah selesai/gagal
-        if (statusTeks === 'COMPLETE' || statusTeks === 'FAILED') {
-            form.addButton({ id: 'custpage_btn_new', label: 'Upload File Baru', functionName: 'backToUpload' });
+        // Hanya tampilkan tombol "Upload New File" jika prosesnya sudah selesai/gagal
+        if (rawStatus === 'COMPLETE' || rawStatus === 'FAILED') {
+            form.addButton({ id: 'custpage_btn_new', label: 'Upload New File', functionName: 'backToUpload' });
         }
 
         response.writePage(form);
