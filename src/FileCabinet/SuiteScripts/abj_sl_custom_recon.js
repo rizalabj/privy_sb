@@ -5,7 +5,7 @@
 define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/file', 'N/redirect'], 
 (serverWidget, search, task, runtime, record, file, redirect) => {
 
-    const PAGE_SIZE = 20;
+    var PAGE_SIZE = 20;
 
     // ========================================================================
     // HELPER FUNCTIONS
@@ -92,7 +92,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         searchObject.run().each(result => {
             log.debug('result', result)
             let orderId = result.getValue({ name: 'custbody_abj_pg_order_id', summary: search.Summary.GROUP }) || '';
-            let grandTotal = result.getValue({ name: 'formulacurrency', summary: search.Summary.SUM, formula: 'NVL({custcol_abj_total_after_1time_disc},0)+NVL({taxamount},0)' }) || '';
+            let grandTotal = result.getValue({ name: 'amountremaining', summary: search.Summary.SUM }) || '';
             if(!orderId){
                 return true;
             }
@@ -126,16 +126,15 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
             
             let matchedNsData = false;
             
-            // Jika data ditemukan di NetSuite, lakukan pengecekan field lainnya
             if (findNsData) {
-                // Konversi angka ke float agar perbandingan nilai uang akurat
+                
                 let isCustomerMatch   = (findNsData.customer === row.merchant_name);
                 let isDateMatch       = (findNsData.date === row.transaction_date);
                 let isPayoutDateMatch = (findNsData.payout_date === row.payout_date);
                 let isGrandTotalMatch = (parseFloat(findNsData.grand_total) === parseFloat(row.amount));
 
                 // Status match = true KECUALI untuk Invoice No dan Fee
-                if (isCustomerMatch && isDateMatch && isPayoutDateMatch && isGrandTotalMatch) {
+                if (isDateMatch && isGrandTotalMatch) {
                     matchedNsData = true;
                 }
             }
@@ -182,7 +181,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
 
         let paymentMethodField = form.addField({ id: 'custpage_payment_method', type: serverWidget.FieldType.SELECT, label: 'Payment Method' });
         paymentMethodField.addSelectOption({ value: '', text: '--Select Payment Method--' });
-        search.create({ type: search.Type.ITEM, filters: [['type', 'anyof', 'Payment']], columns: ['internalid', 'name'] }).run().each(result => {
+        search.create({ type: "paymentmethod", filters: [['isinactive', 'anyof', 'F']], columns: ['internalid', 'name'] }).run().each(result => {
             paymentMethodField.addSelectOption({ value: result.getValue('internalid'), text: result.getValue('name') });
             return true;
         });
@@ -233,6 +232,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         let pageId = parseInt(request.parameters.page) || 1;
         let bankAccount = request.parameters.bank;
         let paymentMethod = request.parameters.method;
+        let pageSize = parseInt(request.parameters.pagesize) || PAGE_SIZE;
 
         let form = serverWidget.createForm({ title: `Preview Reconciliation (Page ${pageId})` });
 
@@ -242,15 +242,18 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
 
         // Pagination Logic
         let totalRecords = csvData.length;
-        let totalPages = Math.ceil(totalRecords / PAGE_SIZE) || 1;
-        let startIndex = (pageId - 1) * PAGE_SIZE;
-        let endIndex = startIndex + PAGE_SIZE;
+        let totalPages = Math.ceil(totalRecords / pageSize) || 1;
+        let startIndex = (pageId - 1) * pageSize;
+        let endIndex = startIndex + pageSize;
         let paginatedCsv = csvData.slice(startIndex, endIndex);
 
         let pageOrderIds = paginatedCsv.map(row => row.qris_transaction_id).filter(id => id !== '');
         
         let netsuiteData = getNetSuiteData(pageOrderIds);
         let paginatedData = matchData(paginatedCsv, netsuiteData);
+        let countMatchedOnThisPage = paginatedData.filter(row => row.is_match === 'Yes').length;
+
+        
 
         
         let sublist = form.addSublist({
@@ -264,7 +267,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         sublist.addField({ id: 'custpage_inv_invoice_no', type: serverWidget.FieldType.TEXT, label: 'Invoice#' });
         sublist.addField({ id: 'custpage_inv_customer', type: serverWidget.FieldType.TEXT, label: 'Customer' });
         sublist.addField({ id: 'custpage_inv_date', type: serverWidget.FieldType.TEXT, label: 'Date' });
-        sublist.addField({ id: 'custpage_inv_payout_date', type: serverWidget.FieldType.TEXT, label: 'Payout Date' });
+        // sublist.addField({ id: 'custpage_inv_payout_date', type: serverWidget.FieldType.TEXT, label: 'Payout Date' });
         sublist.addField({ id: 'custpage_inv_grand_total', type: serverWidget.FieldType.CURRENCY, label: 'Grand Total' });
         // Kolom Kanan (Settlement)
         sublist.addField({ id: 'custpage_set_order_id', type: serverWidget.FieldType.TEXT, label: 'Order ID' });
@@ -281,7 +284,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
             sublist.setSublistValue({ id: 'custpage_inv_invoice_no', line: index, value: row.inv_invoice_no || ' ' });
             sublist.setSublistValue({ id: 'custpage_inv_customer', line: index, value: row.inv_customer || ' ' });
             sublist.setSublistValue({ id: 'custpage_inv_date', line: index, value: row.inv_date || ' ' });
-            sublist.setSublistValue({ id: 'custpage_inv_payout_date', line: index, value: row.inv_payout_date || ' ' });
+            // sublist.setSublistValue({ id: 'custpage_inv_payout_date', line: index, value: row.inv_payout_date || ' ' });
             sublist.setSublistValue({ id: 'custpage_inv_grand_total', line: index, value: row.inv_grand_total || 0 });
 
             sublist.setSublistValue({ id: 'custpage_set_order_id', line: index, value: row.set_order_id || ' ' });
@@ -294,11 +297,13 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         });
 
         // Field Navigasi & Hidden
+        form.addField({ id: 'custpage_page_size', type: serverWidget.FieldType.TEXT, label: 'Data per Halaman' }).defaultValue = pageSize.toString();
         let pageSelect = form.addField({ id: 'custpage_page_select', type: serverWidget.FieldType.SELECT, label: 'Pilih Halaman' });
         for (let i = 1; i <= totalPages; i++) {
             pageSelect.addSelectOption({ value: i, text: `Page ${i}`, isSelected: (i === pageId) });
         }
-
+        form.addField({ id: 'custpage_total_records', type: serverWidget.FieldType.TEXT, label: 'Total Data' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).updateBreakType({ breakType: serverWidget.FieldBreakType.STARTCOL }).defaultValue = totalRecords.toString();
+        form.addField({ id: 'custpage_total_records_on_this_page', type: serverWidget.FieldType.TEXT, label: 'Total Data Match di Halaman Ini' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).defaultValue = countMatchedOnThisPage.toString();
         form.addField({ id: 'custpage_file_id', type: serverWidget.FieldType.TEXT, label: 'File ID' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = fileId;
         form.addField({ id: 'custpage_bank', type: serverWidget.FieldType.TEXT, label: 'Bank' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = bankAccount;
         form.addField({ id: 'custpage_method', type: serverWidget.FieldType.TEXT, label: 'Method' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = paymentMethod;
@@ -322,7 +327,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         cssSuntikan.defaultValue = `
         <style>
             /* 1. Warna Header Kiri (Kolom 1 sampai 6) - Biru */
-            #custpage_recon_listheader td:nth-child(-n+6) {
+            #custpage_recon_listheader td:nth-child(-n+5) {
                 background-color: #dbeafe !important;
                 border-bottom: 2px solid #3b82f6 !important;
             }
@@ -330,17 +335,17 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
                 background-color: #dbeafe !important;
             }
             
-            /* 2. Warna Baris Data Kiri (Kolom 1 sampai 6) - Biru Muda */
+            /* 2. Warna Baris Data Kiri (Kolom 1 sampai 5) - Biru Muda */
             #custpage_recon_list_splits .uir-list-row-tr td:nth-child(-n+6) {
                 background-color: #f0f8ff !important;
             }
 
             /* 3. Warna Header Kanan (Kolom 7 sampai 12) - Kuning */
-            #custpage_recon_listheader td:nth-child(n+7):nth-child(-n+12) {
+            #custpage_recon_listheader td:nth-child(n+6):nth-child(-n+11) {
                 background-color: #fef08a !important;
                 border-bottom: 2px solid #eab308 !important;
             }
-            #custpage_recon_listheader td:nth-child(n+7):nth-child(-n+12) div{
+            #custpage_recon_listheader td:nth-child(n+6):nth-child(-n+11) div{
                 background-color: #fef08a !important;
             }
 
@@ -358,7 +363,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
             jQuery(document).ready(function() {
                 let groupHeaderTR = jQuery('<tr class="uir-machine-headerrow"></tr>');
                 
-                groupHeaderTR.append('<td colspan="6" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #dbeafe !important; border-bottom: 2px solid #3b82f6; border-right: 2px solid #ffffff; padding: 6px 0;">Invoice (NetSuite)</td>');
+                groupHeaderTR.append('<td colspan="5" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #dbeafe !important; border-bottom: 2px solid #3b82f6; border-right: 2px solid #ffffff; padding: 6px 0;">Invoice (NetSuite)</td>');
                 groupHeaderTR.append('<td colspan="6" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #fef08a !important; border-bottom: 2px solid #eab308; border-right: 2px solid #ffffff; padding: 6px 0;">Settlement (CSV Upload)</td>');
                 groupHeaderTR.append('<td colspan="1" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #f3f4f6 !important; border-bottom: 2px solid #9ca3af; padding: 6px 0;">Status</td>');
                 
@@ -385,19 +390,19 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
 
         try {
             // Buat Task Map/Reduce
-            // let mrTask = task.create({
-            //     taskType: task.TaskType.MAP_REDUCE,
-            //     scriptId: 'customscript_abj_mr_custom_bank_recon', // Sesuaikan ID
-            //     params: { 
-            //         'custscript_mr_file_id': fileId,
-            //         'custscript_mr_bank_account': bankAccount,
-            //         'custscript_mr_payment_method': paymentMethod
-            //     }
-            // });
+            let mrTask = task.create({
+                taskType: task.TaskType.MAP_REDUCE,
+                scriptId: 'customscript_abj_mr_custom_recon', // Sesuaikan ID
+                params: { 
+                    'custscript_mr_file_id': fileId,
+                    'custscript_mr_account': bankAccount,
+                    'custscript_mr_payment_method': paymentMethod
+                }
+            });
 
-            // let taskId = mrTask.submit();
-            // log.debug('Map/Reduce Task Submitted', `Task ID: ${taskId}`);
-            let taskId = '12345'
+            let taskId = mrTask.submit();
+            log.debug('Map/Reduce Task Submitted', `Task ID: ${taskId}`);
+            
 
             // Redirect ke halaman Status
             redirect.toSuitelet({

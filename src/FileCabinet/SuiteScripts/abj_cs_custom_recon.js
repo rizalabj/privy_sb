@@ -58,14 +58,16 @@ define([], () => {
         const { fieldId, currentRecord } = context;
 
         // Jika yang diubah adalah dropdown halaman
-        if (fieldId === 'custpage_page_select') {
+        if (fieldId === 'custpage_page_select' || fieldId === 'custpage_page_size') {
             let selectedPage = currentRecord.getValue({ fieldId: 'custpage_page_select' });
+            let pageSize = parseInt(currentRecord.getValue({ fieldId: 'custpage_page_size' })) || PAGE_SIZE;
 
             // Mengambil URL halaman saat ini
             let currentUrl = new URL(window.location.href);
             
             // Set atau update parameter 'page' dengan halaman yang baru dipilih
             currentUrl.searchParams.set('page', selectedPage);
+            currentUrl.searchParams.set('pagesize', pageSize);
 
             // Bypass peringatan default browser "Changes you made may not be saved"
             window.onbeforeunload = null; 

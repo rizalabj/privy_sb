@@ -134,6 +134,7 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         const config = APPROVAL_CONFIG[recType];
         
         let customForm = rec.getValue({ fieldId: 'customform' });
+        let documentStatus = rec.getValue({ fieldId: 'custbody_abj_document_status' });
         let oldStatus = oldRec ? oldRec.getValue({ fieldId: config.statusField })?.toString().toLowerCase().replaceAll(" ", "") : null;
         let newDbStatus = null;
 
@@ -224,13 +225,25 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         }
 
         // JOURNAL AMORT : MAP/REDUCE
-        const allowedCustomForm = ["132", "161", "187", "189"];
+        const allowedCustomForm = [
+            "132", // Privy - Sales Order Prepaid
+            "161", // Privy - Sales Order Postpaid Top Up
+            "187", // Privy - Invoice (Payment Gateway)
+            "189", // Privy - Sales Order Prepaid By Pass
+            "191" // Privy - Sales Order Prepaid Without Top Up
+        ];
         if (!allowedCustomForm.includes(customForm)) {
             log.audit('Ignored Auto Amort CustomForm', customForm);
             return;
         }
 
-        if (justApproved) {
+        let isBilled = documentStatus == "8";
+        if(customForm == "191" && isBilled == false) {
+            log.audit('Ignored Auto Amort CustomForm 191', 'Sales Order Document Status is not Billed');
+            return;
+        }
+
+        if (isNowApproved) {
             try {
                 const mrTask = task.create({
                     taskType: task.TaskType.MAP_REDUCE,

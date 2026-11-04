@@ -281,6 +281,7 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         const month = String(startDateObj.getMonth() + 1).padStart(2, '0');
         const day = String(startDateObj.getDate()).padStart(2, '0');
         const startDateStr = `${year}-${month}-${day}`; 
+        log.debug('checkStartDate', `startDateStr: ${startDateStr}, todayJakartaStr: ${todayJakartaStr}, result: ${startDateStr <= todayJakartaStr}`);
 
         // 4. Bandingkan string murni (contoh: "2026-10-05" <= "2026-10-06")
         return startDateStr <= todayJakartaStr; 

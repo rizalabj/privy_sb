@@ -246,7 +246,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             t.trandate AS so_trandate
           FROM transactionline tl
           JOIN transaction t ON t.id = tl.transaction
-          WHERE t.type = 'SalesOrd' 
+          WHERE (t.type = 'SalesOrd' AND (t.status = 'B' OR t.status = 'F' OR t.status = 'G')) 
+            OR (t.type = 'SalesOrd' AND t.customForm = 191 AND (t.status = 'B' OR t.status = 'F' OR t.status = 'G') AND t.custbody_abj_document_status = 8)
             OR (t.type = 'CustInvc' AND tl.createdFrom IS NULL AND t.customForm = 187)
         ) sol
           ON sol.item = pl.${PRICE_LIST_FIELD_MAP.item}
