@@ -384,23 +384,26 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
 
   const resolveNormalTiering = (tiers, quantity) => {
     const sortedTiers = [...tiers].sort((a, b) => a.minimumQuantity - b.minimumQuantity);
+    log.debug('sortedTiers', sortedTiers);
     
     let selectedTier = null;
     let isFullyCovered = false;
 
-    
+    let usedQty = 0;
     for (const price of sortedTiers) {
-      const usedQty = Math.abs(price.usedQuantity || 0);
+      usedQty = Number(usedQty) + Math.abs(price.usedQuantity || 0);  
       const totalVolume = usedQty + quantity;
       const maxQty = price.maximumQuantity ?? Infinity;
-
+      log.debug('checking tier', { price, totalVolume, minQty : price.minimumQuantity ,maxQty });
       if (totalVolume >= price.minimumQuantity && totalVolume <= maxQty) {
+        log.debug('selected tier', price);
         selectedTier = price;
         isFullyCovered = true;
         break; 
       }
     }
 
+    log.debug('normal tiered allocation', { selectedTier, isFullyCovered, quantity });
     if (!isFullyCovered) {
       selectedTier = sortedTiers[sortedTiers.length - 1];
       
@@ -540,10 +543,14 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     });
   };
 
-  const applyPriceListValuesToLine = (transactionRecord, line, matchedPrice, allocatedQuantity) => {
+  const applyPriceListValuesToLine = (transactionRecord, line, matchedPrice, allocatedQuantity, itemType) => {
     transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'quantity', line, value: allocatedQuantity });
     if(matchedPrice.priceLevel !== null && matchedPrice.priceLevel !== undefined){
-      transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'price', line, value: matchedPrice.priceLevel });
+      if(itemType == 'Kit'){
+        transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'price', line, value: -1 });
+      }else{
+        transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'price', line, value: matchedPrice.priceLevel });
+      }
     }
 
     if (matchedPrice.privyPriceListId !== null && matchedPrice.privyPriceListId !== undefined) {
@@ -555,13 +562,24 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       });
     }
     if (matchedPrice.publishedPrice !== null && matchedPrice.publishedPrice !== undefined) {
-      transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'rate', line, value: matchedPrice.publishedPrice });
-      transactionRecord.setSublistValue({ 
-        sublistId: ITEM_SUBLIST_ID, 
-        fieldId: 'custcol_abj_total_published_price', 
-        line, 
-        value: Number(matchedPrice.publishedPrice) * Number(allocatedQuantity)
-      });
+      if(itemType == 'Kit'){
+        transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'rate', line, value: 0 });
+        transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'amount', line, value: 0 });
+        transactionRecord.setSublistValue({ 
+          sublistId: ITEM_SUBLIST_ID, 
+          fieldId: 'custcol_abj_total_published_price', 
+          line, 
+          value: 0
+        });
+      }else{
+        transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'rate', line, value: matchedPrice.publishedPrice });
+        transactionRecord.setSublistValue({ 
+          sublistId: ITEM_SUBLIST_ID, 
+          fieldId: 'custcol_abj_total_published_price', 
+          line, 
+          value: Number(matchedPrice.publishedPrice) * Number(allocatedQuantity)
+        });
+      }
     }
     if (matchedPrice.finalPrice !== null && matchedPrice.finalPrice !== undefined) {
       transactionRecord.setSublistValue({
@@ -737,6 +755,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
 
       for (let line = 0; line < lineCount; line += 1) {
         const itemId = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'item', line });
+        const itemType = transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'itemtype', line });
         const quantity = Number(transactionRecord.getSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'quantity', line })) || 0;
 
         if (!itemId) {
@@ -785,7 +804,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           allocations = matchedAllocations;
         }
 
-        linePlans.push({ line, allocations });
+        linePlans.push({ line, itemType, allocations });
       }
 
       log.debug('line plans', linePlans);
@@ -804,17 +823,17 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       
 
       for (let i = linePlans.length - 1; i >= 0; i -= 1) {
-        const { line, allocations } = linePlans[i];
+        const { line, itemType, allocations } = linePlans[i];
 
         if (allocations.length === 1) {
-          applyPriceListValuesToLine(transactionRecord, line, allocations[0].matchedPrice, allocations[0].quantity);
+          applyPriceListValuesToLine(transactionRecord, line, allocations[0].matchedPrice, allocations[0].quantity, itemType);
           continue;
         }
 
         const snapshot = captureLineSnapshot(transactionRecord, ITEM_SUBLIST_ID, line);
         log.debug('snapshot', snapshot);
 
-        applyPriceListValuesToLine(transactionRecord, line, allocations[0].matchedPrice, allocations[0].quantity);
+        applyPriceListValuesToLine(transactionRecord, line, allocations[0].matchedPrice, allocations[0].quantity, itemType);
         log.debug('applyPriceListValuesToLine 1', 'applyPriceListValuesToLine 1');
         for (let allocationIndex = 1; allocationIndex < allocations.length; allocationIndex += 1) {
           const insertAt = line + allocationIndex;
@@ -825,7 +844,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             transactionRecord,
             insertAt,
             allocations[allocationIndex].matchedPrice,
-            allocations[allocationIndex].quantity
+            allocations[allocationIndex].quantity,
+            itemType
           );
         }
       }

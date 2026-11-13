@@ -68,7 +68,7 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
         });
 
         log.debug('search customer', lookupCust);
-        if (!lookupCust && lookupCust.custrecord_abj_customer_link) {
+        if (lookupCust && lookupCust.custrecord_abj_customer_link) {
             return lookupCust.custrecord_abj_customer_link[0].value;
         }
         
@@ -100,6 +100,16 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
         value: dateValue,
         type: format.Type.DATE
       });
+    }
+
+    const checkItemKit = (itemId) => {
+        const searchTypeItem = search.lookupFields({
+            type: search.Type.ITEM,
+            id: itemId,
+            columns: ['type']
+        });
+        log.debug('searchTypeItem', searchTypeItem);
+        return searchTypeItem.type[0].value == 'Kit';
     }
 
     const createUsageRecord = (data) =>{
@@ -167,6 +177,13 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
             let i =0;
             setSublistFieldValue(rec, 'item','item', cleanInternalId(data?.data?.item_id), i);
             setSublistFieldValue(rec, 'item','quantity', data?.data?.quantity, i);
+            let isItemKit = checkItemKit(data?.data?.item_id);
+            log.debug('isItemKit', isItemKit);
+            if(isItemKit){
+                // setSublistFieldValue(rec, 'item','price', -1, i);
+                setSublistFieldValue(rec, 'item','rate', 1000, i);
+                setSublistFieldValue(rec, 'item','amount', 1000, i);
+            }
 
             log.debug('saving', 'progresss');
             let recId = rec.save();

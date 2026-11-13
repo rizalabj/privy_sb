@@ -65,20 +65,27 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
             if (headerBillingType) jeRec.setValue({ fieldId: 'cseg_abj_billing_ty', value: headerBillingType });
             if (lineItem[0]?.trxId) jeRec.setValue({ fieldId: 'custbody_abj_so_link', value: lineItem[0].trxId });
 
-            const loadDiscountItem = record.load({ type: 'discountitem', id: discountItem[0].itemId });
-            let discountAccount = loadDiscountItem ? loadDiscountItem.getValue('account') : '';
+            // TO DO : Handle discountItem if needed, currently only lineItem is processed for journal lines.
+            let discountAccount = '';
+            // if (discountItem.length > 0) {
+            //     log.debug('Discount Items Present', discountItem);
+            //     const loadDiscountItem = record.load({ type: 'discountitem', id: discountItem[0].itemId });
+            //     discountAccount = loadDiscountItem ? loadDiscountItem.getValue('account') : '';
+            // }
             
             let coaItems = search.create({
                 type: 'item',
                 filters: [['internalid', 'anyof', lineItem.map(item => item.itemId)]],
-                columns: ['custitem_abj_income_usage_account', 'incomeaccount']
+                columns: ['custitem_abj_income_usage_account', 'incomeaccount', 'custitem_abj_reconciliation_account']
             }).run().getRange({ start: 0, end: lineItem.length });
             
             let itemAccounts = {};
             coaItems.forEach(item => {
+                let reconciliationAccount = item.getValue('custitem_abj_reconciliation_account');
                 itemAccounts[item.id] = {
-                    incomeAccount: item.getValue('incomeaccount'),
-                    usageAccount: item.getValue('custitem_abj_income_usage_account')
+                    incomeAccount: reconciliationAccount,
+                    usageAccount: item.getValue('custitem_abj_income_usage_account'),
+                    discountAccount : reconciliationAccount,
                 };
             });
 
@@ -86,11 +93,11 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
             for (const item of lineItem) {
                 const itemAccount = itemAccounts[item.itemId];
-                const baseAmount = item.publishedPrice * item.reconVariance * -1;
+                const baseAmount = item.finalPrice * item.reconVariance;
                 const premiumDiscountAmount = item.premiumDiscount * item.reconVariance;
                 const oneTimeDiscountAmount = item.oneTimeDiscount * item.reconVariance;
                 // const incomeAmount = item.rate * item.reconVariance;
-                const incomeAmount = (baseAmount + premiumDiscountAmount + oneTimeDiscountAmount) * -1;
+                const incomeAmount = (baseAmount + oneTimeDiscountAmount) * -1;
                 
                 const addLine = (account, amount, customDesc = item.itemDescription) => {
                     setJournalLine({ ...item, jeRec, account, amount, itemDescription: customDesc, lineJournal });
@@ -101,13 +108,13 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
                 if (item.reconVariance < 0) {
                     linesToProcess.push({ account: itemAccount.usageAccount, amount: baseAmount });
-                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: premiumDiscountAmount, desc: 'Premium Discount' });
-                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: oneTimeDiscountAmount, desc: 'One Time Discount' });
+                    // if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: premiumDiscountAmount, desc: 'Premium Discount' });
+                    if (item.oneTimeDiscount) linesToProcess.push({ account: item.discountAccount, amount: oneTimeDiscountAmount, desc: 'One Time Discount' });
                     linesToProcess.push({ account: itemAccount.incomeAccount, amount: incomeAmount });
                 } else {
                     linesToProcess.push({ account: itemAccount.incomeAccount, amount: incomeAmount });
-                    if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: premiumDiscountAmount, desc: 'Premium Discount' });
-                    if (item.oneTimeDiscount) linesToProcess.push({ account: discountAccount, amount: oneTimeDiscountAmount, desc: 'One Time Discount' });
+                    // if (item.premiumDiscount) linesToProcess.push({ account: discountAccount, amount: premiumDiscountAmount, desc: 'Premium Discount' });
+                    if (item.oneTimeDiscount) linesToProcess.push({ account: item.discountAccount, amount: oneTimeDiscountAmount, desc: 'One Time Discount' });
                     linesToProcess.push({ account: itemAccount.usageAccount, amount: baseAmount });
                 }
 
@@ -155,8 +162,8 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
         log.debug('Approval Status Details', `Old: ${oldStatus} | New: ${newDbStatus} | IsApproved: ${isNowApproved}`);
 
-        // RECON JOURNAL (Custom Form 112)
-        if (customForm == '112') {
+        // RECON JOURNAL (Custom Form 112) ubah ke 100 (punya invoice)
+        if (customForm == '100') {
             if (!isNowApproved) {
                 log.audit('Skipping Recon JE', `Transaction ${recId} is not approved yet.`);
                 return;
@@ -172,13 +179,15 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
                 let premiumDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_discount_premium', line: i });
                 let oneTimeDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_dis_onetime_pcs', line: i });
                 let itemText = rec.getSublistText({ sublistId: 'item', fieldId: 'item', line: i });
+                let reconVariance = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_recon_variance', line: i }) || 0;
 
                 let lineData = {
                     itemId: rec.getSublistValue({ sublistId: 'item', fieldId: 'item', line: i }),
                     rate: rec.getSublistValue({ sublistId: 'item', fieldId: 'rate', line: i }),
                     publishedPrice: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_published_price', line: i }),
+                    finalPrice: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_final_price', line: i }),
                     qty: rec.getSublistValue({ sublistId: 'item', fieldId: 'quantity', line: i }),
-                    reconVariance: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_recon_variance', line: i }),
+                    reconVariance: reconVariance,
                     premiumDiscount: premiumDiscount ? Math.abs(premiumDiscount) : '',
                     oneTimeDiscount: oneTimeDiscount ? Math.abs(oneTimeDiscount) : '',
                     trxId: recId,
@@ -197,11 +206,24 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
                     lineSO: rec.getSublistValue({ sublistId: 'item', fieldId: 'line', line: i })
                 };
 
+                
+
                 if (itemType === 'Discount') {
                     discountItem.push(lineData);
                 } else {
+                    if(!lineData.itemId || lineData.reconVariance === 0) {
+                        log.audit('Skipping Line', `Line ${i + 1} skipped due to missing item or zero recon variance.`);
+                        continue;
+                    }
                     lineItem.push(lineData);
                 }
+            }
+
+            log.debug('Line Items for Recon JE', { lineItem, discountItem });
+
+            if(lineItem.length === 0) {
+                log.audit('No Valid Lines', `Transaction ${recId} has no valid lines for journal entry creation.`);
+                return;
             }
 
             const reconJournalEntry = createReconJournalEntry({

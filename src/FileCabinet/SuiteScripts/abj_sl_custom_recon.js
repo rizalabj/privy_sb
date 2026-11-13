@@ -2,8 +2,8 @@
  * @NApiVersion 2.1
  * @NScriptType Suitelet
  */
-define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/file', 'N/redirect'], 
-(serverWidget, search, task, runtime, record, file, redirect) => {
+define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/file', 'N/redirect', 'N/format'], 
+(serverWidget, search, task, runtime, record, file, redirect, format) => {
 
     var PAGE_SIZE = 20;
 
@@ -49,6 +49,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
             const parseNum = (val) => parseFloat(cleanText(val).replace(/,/g, '')) || 0;
 
             result.push({
+                index: i,
                 merchant_name: cleanText(columns[1]),
                 transaction_date: cleanText(columns[3]),
                 doku_invoice: cleanText(columns[4]),
@@ -141,6 +142,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
             
             finalData.push({
                 // --- SISI KIRI (INVOICE - DARI NETSUITE / SAVED SEARCH) ---
+                index: row.index,
                 inv_order_id: findNsData ? findNsData.order_id : '',
                 inv_invoice_no: findNsData ? findNsData.invoice_no : '',
                 inv_customer: findNsData ? findNsData.customer : '',
@@ -225,50 +227,132 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         });
     };
 
-    // 3. Render Halaman Preview & Paginasi
     const renderPreviewPage = (context) => {
         const { request, response } = context;
-        let fileId = request.parameters.fileId;
+        let fileId = request.parameters.fileId || request.parameters.custpage_file_id;
         let pageId = parseInt(request.parameters.page) || 1;
         let bankAccount = request.parameters.bank;
         let paymentMethod = request.parameters.method;
         let pageSize = parseInt(request.parameters.pagesize) || PAGE_SIZE;
+        
+        // 1. Ambil Parameter Tanggal dari URL
+        let startDateParam = request.parameters.startdate || '';
+        let endDateParam = request.parameters.enddate || '';
 
         let form = serverWidget.createForm({ title: `Preview Reconciliation (Page ${pageId})` });
 
+        let selectedIdsParam = request.parameters.custpage_selected_ids || request.parameters.selectedids || '[]';
+
+        // Buat hidden field
+        let hiddenSelected = form.addField({ 
+            id: 'custpage_selected_ids', 
+            type: serverWidget.FieldType.LONGTEXT, 
+            label: 'Selected IDs' 
+        });
+        hiddenSelected.updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN });
+        hiddenSelected.defaultValue = selectedIdsParam;
+
+        // 2. Tambahkan Field Filter Tanggal
+        form.addField({ id: 'custpage_start_date', type: serverWidget.FieldType.DATE, label: 'Start Date (Settlement)' })
+            .defaultValue = startDateParam;
+        form.addField({ id: 'custpage_end_date', type: serverWidget.FieldType.DATE, label: 'End Date (Settlement)' })
+            .defaultValue = endDateParam;
+
         // Load & Parse CSV
         let fileObj = file.load({ id: fileId });
-        let csvData = parseCSV(fileObj.getContents());
+        let csvData = parseCSV(fileObj.getContents()); //
+        log.debug('csvData', csvData);
+        // 3. HITUNG TOTAL AWAL BERDASARKAN MEMORI
+        let initialTotalAmount = 0;
+        csvData.forEach(row => {
+            // Jika csv_line_index baris ini ada di dalam array yang dicentang
+            if (selectedIdsParam.includes(row.index)) {
+                initialTotalAmount += parseFloat(row.amount) || 0; // Sesuaikan dengan nama properti amount di parseCSV Anda
+            }
+        });
+        // 3. Logika Filter Tanggal
+        if (startDateParam || endDateParam) {
+            
+            // Parsing tanggal dari filter UI NetSuite menggunakan N/format (format sesuai preferensi User)
+            let start = startDateParam ? format.parse({ value: startDateParam, type: format.Type.DATE }) : null;
+            let end = endDateParam ? format.parse({ value: endDateParam, type: format.Type.DATE }) : null;
+            log.debug('start', start);
+            log.debug('end', end);
+            
+            // Normalkan jamnya untuk perbandingan
+            if (start) start.setHours(0, 0, 0, 0); // Awal hari
+            if (end) end.setHours(23, 59, 59, 999); // Akhir hari
+            
+            csvData = csvData.filter(row => {
+                if (!row.transaction_date) return true; // Lewati jika kosong
+                
+                let dateOnly = row.transaction_date.split('T')[0]; 
+                log.debug('dateOnly', dateOnly);
+                
+                
+                let dateParts = dateOnly.split('/'); // Format CSV: DD/MM/YYYY
+                log.debug('dateParts', dateParts);
+                
+                if (dateParts.length !== 3) return true; // Cek pengaman jika format tidak sesuai
+                
+                let year = parseInt(dateParts[2], 10);
+                let month = parseInt(dateParts[1], 10) - 1; // JS Month dimulai dari 0 (0 = Jan, 8 = Sept)
+                let day = parseInt(dateParts[0], 10); 
+
+                // Jika ternyata format CSV-nya YYYY-MM-DD (9 Oktober), maka tukar kodenya menjadi:
+                // let month = parseInt(dateParts[1], 10) - 1;
+                // let day = parseInt(dateParts[2], 10);
+                
+                // 4. Buat objek tanggal dengan jam netral (00:00:00)
+                let rowDate = new Date(year, month, day);
+                rowDate.setHours(0, 0, 0, 0);
+                log.debug('rowDate', rowDate);
+                log.debug('start', start);
+                log.debug('end', end);
+                
+                // Cek Validitas
+                if (isNaN(rowDate.getTime())) return true;
+                
+                // Bandingkan secara absolut
+                if (start && rowDate < start) return false;
+                if (end && rowDate > end) return false;
+                
+                return true;
+            });
+            
+            // Reset ke halaman 1 setelah filter
+            if (!request.parameters.page) pageId = 1; 
+        }
 
         // Pagination Logic
         let totalRecords = csvData.length;
         let totalPages = Math.ceil(totalRecords / pageSize) || 1;
+        if (pageId > totalPages) pageId = totalPages; // Pengaman
+        
         let startIndex = (pageId - 1) * pageSize;
         let endIndex = startIndex + pageSize;
         let paginatedCsv = csvData.slice(startIndex, endIndex);
 
-        let pageOrderIds = paginatedCsv.map(row => row.qris_transaction_id).filter(id => id !== '');
+        let pageOrderIds = paginatedCsv.map(row => row.qris_transaction_id).filter(id => id !== ''); //[cite: 2]
         
         let netsuiteData = getNetSuiteData(pageOrderIds);
         let paginatedData = matchData(paginatedCsv, netsuiteData);
         let countMatchedOnThisPage = paginatedData.filter(row => row.is_match === 'Yes').length;
-
-        
-
-        
         let sublist = form.addSublist({
             id: 'custpage_recon_list',
             type: serverWidget.SublistType.LIST,
-            label: `Data Preview (${startIndex + 1} - ${Math.min(endIndex, totalRecords)} dari ${totalRecords})`
+            label: `Data Preview (${totalRecords > 0 ? startIndex + 1 : 0} - ${Math.min(endIndex, totalRecords)} dari ${totalRecords})`
         });
+
+        sublist.addMarkAllButtons(); // Otomatis tambah Check All / Uncheck All
 
         // Kolom Kiri (Invoice)
         sublist.addField({ id: 'custpage_inv_order_id', type: serverWidget.FieldType.TEXT, label: 'Order ID' });
         sublist.addField({ id: 'custpage_inv_invoice_no', type: serverWidget.FieldType.TEXT, label: 'Invoice#' });
         sublist.addField({ id: 'custpage_inv_customer', type: serverWidget.FieldType.TEXT, label: 'Customer' });
         sublist.addField({ id: 'custpage_inv_date', type: serverWidget.FieldType.TEXT, label: 'Date' });
-        // sublist.addField({ id: 'custpage_inv_payout_date', type: serverWidget.FieldType.TEXT, label: 'Payout Date' });
         sublist.addField({ id: 'custpage_inv_grand_total', type: serverWidget.FieldType.CURRENCY, label: 'Grand Total' });
+        
         // Kolom Kanan (Settlement)
         sublist.addField({ id: 'custpage_set_order_id', type: serverWidget.FieldType.TEXT, label: 'Order ID' });
         sublist.addField({ id: 'custpage_set_customer', type: serverWidget.FieldType.TEXT, label: 'Customer' });
@@ -278,13 +362,17 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         sublist.addField({ id: 'custpage_set_fee', type: serverWidget.FieldType.CURRENCY, label: 'Fee' });
         sublist.addField({ id: 'custpage_is_match', type: serverWidget.FieldType.TEXT, label: 'Match' });
 
-        // Set Data
+        // Kolom Checkbox
+        sublist.addField({ id: 'custpage_checkbox_select', type: serverWidget.FieldType.CHECKBOX, label: 'Select' });
+        sublist.addField({ id: 'custpage_csv_index', type: serverWidget.FieldType.INTEGER, label: 'CSV Index' })
+           .updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN });
+
+        // Set Data ke Sublist
         paginatedData.forEach((row, index) => {
             sublist.setSublistValue({ id: 'custpage_inv_order_id', line: index, value: row.inv_order_id || ' ' });
             sublist.setSublistValue({ id: 'custpage_inv_invoice_no', line: index, value: row.inv_invoice_no || ' ' });
             sublist.setSublistValue({ id: 'custpage_inv_customer', line: index, value: row.inv_customer || ' ' });
             sublist.setSublistValue({ id: 'custpage_inv_date', line: index, value: row.inv_date || ' ' });
-            // sublist.setSublistValue({ id: 'custpage_inv_payout_date', line: index, value: row.inv_payout_date || ' ' });
             sublist.setSublistValue({ id: 'custpage_inv_grand_total', line: index, value: row.inv_grand_total || 0 });
 
             sublist.setSublistValue({ id: 'custpage_set_order_id', line: index, value: row.set_order_id || ' ' });
@@ -293,7 +381,11 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
             sublist.setSublistValue({ id: 'custpage_set_payout_date', line: index, value: row.set_payout_date || ' ' });
             sublist.setSublistValue({ id: 'custpage_set_grand_total', line: index, value: row.set_grand_total || 0 });
             sublist.setSublistValue({ id: 'custpage_set_fee', line: index, value: row.set_fee || 0 });
-            sublist.setSublistValue({ id: 'custpage_is_match', line: index, value: row.is_match || 'No' });
+            sublist.setSublistValue({ id: 'custpage_is_match', line: index, value: row.is_match || 'No' }); //[cite: 2]
+            
+            // Default check jika Match
+            sublist.setSublistValue({ id: 'custpage_checkbox_select', line: index, value: 'F'});
+            sublist.setSublistValue({ id: 'custpage_csv_index', line: index, value: row.index });
         });
 
         // Field Navigasi & Hidden
@@ -304,19 +396,33 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         }
         form.addField({ id: 'custpage_total_records', type: serverWidget.FieldType.TEXT, label: 'Total Records' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).updateBreakType({ breakType: serverWidget.FieldBreakType.STARTCOL }).defaultValue = totalRecords.toString();
         form.addField({ id: 'custpage_total_records_on_this_page', type: serverWidget.FieldType.TEXT, label: 'Total Matched Records on This Page' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.DISABLED }).defaultValue = countMatchedOnThisPage.toString();
+        let totalSelectedField = form.addField({ 
+            id: 'custpage_total_selected_amount', 
+            type: serverWidget.FieldType.CURRENCY, 
+            label: 'Total Settlement Selected' 
+        });
+        log.debug('initialTotalAmount', initialTotalAmount);
+        totalSelectedField.updateDisplayType({ displayType: serverWidget.FieldDisplayType.INLINE }); // Read-only
+        totalSelectedField.defaultValue = initialTotalAmount; // Set hasil hitungan dari CSV
         form.addField({ id: 'custpage_file_id', type: serverWidget.FieldType.TEXT, label: 'File ID' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = fileId;
         form.addField({ id: 'custpage_bank', type: serverWidget.FieldType.TEXT, label: 'Bank' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = bankAccount;
         form.addField({ id: 'custpage_method', type: serverWidget.FieldType.TEXT, label: 'Method' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = paymentMethod;
-        form.addField({ id: 'custpage_step', type: serverWidget.FieldType.TEXT, label: 'Step' })
-            .updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN })
-            .defaultValue = 'process';
+        form.addField({ id: 'custpage_step', type: serverWidget.FieldType.TEXT, label: 'Step' }).updateDisplayType({ displayType: serverWidget.FieldDisplayType.HIDDEN }).defaultValue = 'process'; //[cite: 2]
+        
+        // 4. Tambahkan Tombol
+        form.addButton({ 
+            id: 'custpage_btn_apply_filter', 
+            label: 'Apply Filter', 
+            functionName: 'applyFilter' // Memanggil fungsi di Client Script
+        });
         
         form.addButton({ 
             id: 'custpage_btn_back', 
             label: 'Back', 
-            functionName: 'goBackToUpload' // Memanggil fungsi JS di bawah
+            functionName: 'goBackToUpload' 
         });
-        form.addSubmitButton({ label: 'Submit' });
+        
+        form.addSubmitButton({ label: 'Submit Process' });
 
         let cssSuntikan = form.addField({ 
             id: 'custpage_inject_css', 
@@ -365,14 +471,33 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
                 
                 groupHeaderTR.append('<td colspan="5" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #dbeafe !important; border-bottom: 2px solid #3b82f6; border-right: 2px solid #ffffff; padding: 6px 0;">Invoice (NetSuite)</td>');
                 groupHeaderTR.append('<td colspan="6" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #fef08a !important; border-bottom: 2px solid #eab308; border-right: 2px solid #ffffff; padding: 6px 0;">Settlement (CSV Upload)</td>');
-                groupHeaderTR.append('<td colspan="1" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #f3f4f6 !important; border-bottom: 2px solid #9ca3af; padding: 6px 0;">Status</td>');
+                groupHeaderTR.append('<td colspan="3" style="text-align: center; font-size: 14px; font-weight: bold; background-color: #f3f4f6 !important; border-bottom: 2px solid #9ca3af; padding: 6px 0;">Status</td>');
                 
                 jQuery('#custpage_recon_listheader').before(groupHeaderTR);
+                jQuery('#custpage_recon_list_splits .uir-list-row-tr').each(function() {
+                    // Ambil nilai text dari kolom ke-12 (Match Status)
+                    let matchStatus = jQuery(this).find('td:nth-child(12)').text().trim();
+                    
+                    if (matchStatus !== 'Yes') {
+                        // Temukan kolom ke-13 (Checkbox)
+                        let checkboxCell = jQuery(this).find('td:nth-child(13)');
+                        let checkboxInput = checkboxCell.find('input[type="checkbox"], input[type="hidden"]');
+                        
+                        // Disable elemen input HTML-nya
+                        checkboxInput.prop('disabled', true);
+                        
+                        // Buat sel tersebut tidak merespon klik (pointer-events) dan transparan agar terlihat mati
+                        checkboxCell.css({
+                            'pointer-events': 'none',
+                            'opacity': '0.4'
+                        });
+                    }
+                });
             });
         </script>
         `;
 
-        form.clientScriptModulePath = './abj_cs_custom_recon.js'; 
+        form.clientScriptModulePath = './abj_cs_custom_recon.js'; //[cite: 2]
 
         response.writePage(form);
     };
@@ -384,6 +509,7 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
         let bankAccount = request.parameters.custpage_bank;
         let paymentMethod = request.parameters.custpage_method;
         let userId = runtime.getCurrentUser().id;
+        let selectedIds = request.parameters.custpage_selected_ids || request.parameters.selectedids || '[]';
 
         // Buat History Record
         // let historyId = createCustomCBRHistory(userId, fileId, bankAccount, paymentMethod);
@@ -396,7 +522,8 @@ define(['N/ui/serverWidget', 'N/search', 'N/task', 'N/runtime', 'N/record', 'N/f
                 params: { 
                     'custscript_mr_file_id': fileId,
                     'custscript_mr_account': bankAccount,
-                    'custscript_mr_payment_method': paymentMethod
+                    'custscript_mr_payment_method': paymentMethod,
+                    'custscript_selected_index' : selectedIds
                 }
             });
 

@@ -2,7 +2,56 @@
  * @NApiVersion 2.1
  * @NScriptType UserEventScript
  */
-define(['./abj_price_pricelist_helper', 'N/log', 'N/record'], (priceListHelper, log, record) => {
+define(['./abj_price_pricelist_helper', 'N/log', 'N/record','N/search'], (priceListHelper, log, record, search) => {
+
+  const getComponentItems = (bundleItemId) => {
+    const componentItems = [];
+    try {
+      const searchObject = search.create({
+        type: 'item',
+        filters: [
+          ['internalid', 'anyof', bundleItemId]
+        ],
+        columns: ['memberitem','memberquantity']
+      });
+      const searchResults = searchObject.run().getRange({ start: 0, end: 1000 });
+      searchResults.forEach(result => {
+        const memberItemId = result.getValue('memberitem');
+        const memberQuantity = result.getValue('memberquantity');
+        if (memberItemId) {
+          componentItems.push({ itemId: memberItemId, quantity: memberQuantity });
+        }
+      });
+    } catch (error) {
+      log.error({ title: 'Error fetching component items', details: error });
+    }
+    return componentItems;
+  }
+
+  const initializeComponentItems = (transactionRecord) => {
+    const lineCount = transactionRecord.getLineCount({ sublistId: 'item' });
+    for (let i = 0; i < lineCount; i++) {
+      const itemId = transactionRecord.getSublistValue({ sublistId: 'item', fieldId: 'item', line: i });
+      const itemType = transactionRecord.getSublistValue({ sublistId: 'item', fieldId: 'itemtype', line : i });
+      const quantity = transactionRecord.getSublistValue({ sublistId: 'item', fieldId: 'quantity', line: i });
+      log.debug(`Line ${i + 1}: itemId=${itemId}, itemType=${itemType}`);
+      const isKitItem = itemType === 'Kit';
+      if (itemId && isKitItem) {
+        const componentItems = getComponentItems(itemId);
+        log.debug(`Component items for bundle item ${itemId}:`, componentItems);
+        let newLineIndex = i + 1; // Start inserting after the current line
+        componentItems.forEach(component => {
+          transactionRecord.setSublistValue({ sublistId: 'item', fieldId: 'item', value: component.itemId, line: newLineIndex });
+          transactionRecord.setSublistValue({ sublistId: 'item', fieldId: 'quantity', value: quantity, line: newLineIndex });
+          // transactionRecord.setSublistValue({ sublistId: 'item', fieldId: 'quantity', value: component.quantity * quantity, line: newLineIndex });
+          newLineIndex++; // Move to the next line for the next component
+        });
+      }
+      
+    }
+  }
+
+
   const beforeSubmit = (context) => {
     log.debug({ title: 'abj_ue_usage beforeSubmit', details: context });
     try {
@@ -15,9 +64,12 @@ define(['./abj_price_pricelist_helper', 'N/log', 'N/record'], (priceListHelper, 
       if (!allowedEventTypes.includes(context.type)) {
         return;
       }
+      const transactionRecord = context.newRecord;
+      // 1. GENERATE COMPONENT ITEMS DARI BUNDLE
+      initializeComponentItems(transactionRecord);
 
       priceListHelper.applyPriceListToTransaction({
-        transactionRecord: context.newRecord
+        transactionRecord: transactionRecord
       });
     } catch (error) {
       log.error({ title: 'abj_ue_usage beforeSubmit error', details: error });
@@ -117,6 +169,13 @@ define(['./abj_price_pricelist_helper', 'N/log', 'N/record'], (priceListHelper, 
             // Kita cek keduanya agar aman dari perbedaan arsitektur form NetSuite.
             const currentLineId = String(soRecord.getSublistValue({ sublistId: 'item', fieldId: 'line', line: i }));
             const currentLineUnique = String(soRecord.getSublistValue({ sublistId: 'item', fieldId: 'lineuniquekey', line: i }));
+            const itemType = soRecord.getSublistValue({ sublistId: 'item', fieldId: 'itemtype', line: i });
+
+            if(itemType === 'Kit') {
+              // Jika item adalah Kit, kita skip update usage karena kita hanya ingin mengupdate usage untuk komponen individual.
+              log.debug(`Skipping line ${i + 1} for SO ID ${soId} because it's a Kit item.`);
+              continue;
+            }
 
             // Cari apakah baris ini perlu di-update berdasarkan Map kita
             let targetDelta = null;

@@ -2,103 +2,181 @@
  * @NApiVersion 2.1
  * @NScriptType ClientScript
  */
-define([], () => {
+define(['N/url', 'N/currentRecord'], (url, currentRecord) => {
 
+    // Helper: Mengambil array dari hidden field
+    function getSelectedIds(rec) {
+        let val = rec.getValue({ fieldId: 'custpage_selected_ids' });
+        try { return val ? JSON.parse(val) : []; } catch (e) { return []; }
+    }
+
+    // FUNGSI INTI: Menyapu bersih seluruh tabel di layar dan menyimpannya ke memori.
+    // Ini adalah kunci agar "Mark All" / "Unmark All" terbaca!
+    function syncCurrentPageToMemory(rec) {
+        let selectedArray = getSelectedIds(rec);
+        let lineCount = rec.getLineCount({ sublistId: 'custpage_recon_list' });
+        
+        // Ambil total saat ini yang ada di layar
+        let currentTotal = parseFloat(rec.getValue({ fieldId: 'custpage_total_selected_amount' })) || 0;
+        console.log('Current Total Before Sync:', currentTotal);
+        
+        for (let i = 0; i < lineCount; i++) {
+            let isMatch = rec.getSublistValue({ sublistId: 'custpage_recon_list', fieldId: 'custpage_is_match', line: i });
+            let isChecked = rec.getSublistValue({ sublistId: 'custpage_recon_list', fieldId: 'custpage_checkbox_select', line: i });
+            let csvIdxStr = rec.getSublistValue({ sublistId: 'custpage_recon_list', fieldId: 'custpage_csv_index', line: i });
+            let amountStr = rec.getSublistValue({ sublistId: 'custpage_recon_list', fieldId: 'custpage_set_grand_total', line: i }); // Ambil nilai uang baris ini
+            console.log('csvIdxStr', { csvIdxStr, isMatch});
+
+            if (csvIdxStr) {
+                let csvIndex = parseInt(csvIdxStr, 10);
+                let rowAmount = parseFloat(amountStr) || 0;
+
+                if ((isChecked === true || isChecked === 'T') && isMatch != 'No') {
+                    // Jika dicentang tapi belum ada di memori, tambahkan ke array dan tambahkan uangnya ke total
+                    if (!selectedArray.includes(csvIndex)) {
+                        selectedArray.push(csvIndex);
+                        currentTotal += rowAmount;
+                    }
+                } else {
+                    // Jika tidak dicentang tapi sebelumnya ada di memori, hapus dari array dan kurangi uangnya dari total
+                    if (selectedArray.includes(csvIndex)) {
+                        selectedArray = selectedArray.filter(id => id !== csvIndex);
+                        currentTotal -= rowAmount;
+                    }
+                }
+            }
+        }
+        
+        // Simpan array terbaru ke hidden field
+        rec.setValue({ fieldId: 'custpage_selected_ids', value: JSON.stringify(selectedArray), ignoreFieldChange: true });
+        
+        // Update field Total Amount di layar secara real-time
+        rec.setValue({ fieldId: 'custpage_total_selected_amount', value: currentTotal, ignoreFieldChange: true });
+    }
+
+    // 1. Inisialisasi Halaman
     const pageInit = (context) => {
-        // Pastikan jQuery tersedia (standar UI NetSuite)
-        // let table = document.getElementById('custpage_recon_list_splits');
-        // console.log('table', table);
-        // console.log('typeof jQuery', typeof jQuery);
-        // if (typeof jQuery !== 'undefined') {
+        let rec = context.currentRecord;
+        let selectedArray = getSelectedIds(rec);
+        let lineCount = rec.getLineCount({ sublistId: 'custpage_recon_list' });
+        
+        for (let i = 0; i < lineCount; i++) {
+            let csvIdxStr = rec.getSublistValue({ sublistId: 'custpage_recon_list', fieldId: 'custpage_csv_index', line: i });
+            let isMatch = rec.getSublistValue({ sublistId: 'custpage_recon_list', fieldId: 'custpage_is_match', line: i });
+            console.log('csvIdxStr', { csvIdxStr, isMatch});
             
-        //     // Tentukan warna (Hex Code)
-        //     const colorLeftHeader = '#dbeafe';  // Biru untuk Header NetSuite
-        //     const colorLeftBody = '#f0f8ff';    // Biru sangat muda untuk Data NetSuite
-            
-        //     const colorRightHeader = '#fef08a'; // Kuning/Oranye untuk Header CSV Upload
-        //     const colorRightBody = '#fffaf0';   // Kuning sangat muda untuk Data CSV Upload
+            if (csvIdxStr && isMatch != 'No') {
+                let csvIndex = parseInt(csvIdxStr, 10);
+                if (selectedArray.includes(csvIndex)) {
+                    // PENGGUNAAN AMAN DI PAGE INIT (Tidak memicu infinite loop)
+                    rec.selectLine({ sublistId: 'custpage_recon_list', line: i });
+                    rec.setCurrentSublistValue({ sublistId: 'custpage_recon_list', fieldId: 'custpage_checkbox_select', value: true, ignoreFieldChange: true });
+                    rec.commitLine({ sublistId: 'custpage_recon_list' });
+                }
+            }
+        }
 
-        //     let leftColIndexes = [];
-        //     let rightColIndexes = [];
-
-        //     // 1. Deteksi index kolom berdasarkan ID header
-        //     jQuery('.uir-list-header-td').each(function(index) {
-        //         let cellId = jQuery(this).attr('id') || '';
-                
-        //         if (cellId.includes('custpage_inv_')) {
-        //             leftColIndexes.push(index);
-        //             // Warnai Header Kiri
-        //             jQuery(this).css('background-color', colorLeftHeader).css('border-bottom', '2px solid #3b82f6');
-        //         } 
-        //         else if (cellId.includes('custpage_set_')) {
-        //             rightColIndexes.push(index);
-        //             // Warnai Header Kanan
-        //             jQuery(this).css('background-color', colorRightHeader).css('border-bottom', '2px solid #eab308');
-        //         }
-        //     });
-
-        //     // 2. Warnai semua baris data di bawahnya sesuai index kolom yang ditemukan
-        //     jQuery('.uir-list-row-tr').each(function() {
-        //         let cells = jQuery(this).children('td');
-                
-        //         // Set warna untuk sel kolom kiri
-        //         leftColIndexes.forEach(idx => {
-        //             if(cells[idx]) jQuery(cells[idx]).css('background-color', colorLeftBody);
-        //         });
-                
-        //         // Set warna untuk sel kolom kanan
-        //         rightColIndexes.forEach(idx => {
-        //             if(cells[idx]) jQuery(cells[idx]).css('background-color', colorRightBody);
-        //         });
-        //     });
-        // }
+        if (typeof window !== 'undefined' && window.document) {
+            let markAllBtn = document.getElementById('custpage_recon_listmarkall');
+            let unmarkAllBtn = document.getElementById('custpage_recon_listunmarkall');
+            if (markAllBtn) markAllBtn.addEventListener('click', () => setTimeout(() => syncCurrentPageToMemory(context.currentRecord), 300));
+            if (unmarkAllBtn) unmarkAllBtn.addEventListener('click', () => setTimeout(() => syncCurrentPageToMemory(context.currentRecord), 300));
+        }
+        syncCurrentPageToMemory(rec);
     };
 
+    // 2. Tombol Apply Filter
+    function applyFilter() {
+        var rec = currentRecord.get();
+        
+        // PENTING: Sapu bersih checkbox di layar ke memori SEBELUM me-refresh halaman
+        syncCurrentPageToMemory(rec);
+        
+        var startDate = rec.getText({ fieldId: 'custpage_start_date' });
+        var endDate = rec.getText({ fieldId: 'custpage_end_date' });
+        var fileId = rec.getValue({ fieldId: 'custpage_file_id' });
+        var bankAccount = rec.getValue({ fieldId: 'custpage_bank' });
+        var paymentMethod = rec.getValue({ fieldId: 'custpage_method' });
+        var selectedIds = rec.getValue({ fieldId: 'custpage_selected_ids' }); // Memori terbaru
+        
+        var suiteletUrl = url.resolveScript({
+            scriptId: 'customscript_abj_sl_custom_recon', 
+            deploymentId: 'customdeploy_abj_sl_custom_recon', 
+            params: {
+                'step': 'preview',
+                'fileId': fileId,
+                'bank': bankAccount,
+                'method': paymentMethod,
+                'page': '1', 
+                'startdate': startDate,
+                'enddate': endDate,
+                'selectedids': selectedIds 
+            }
+        });
+        
+        window.onbeforeunload = null; 
+        window.location.href = suiteletUrl;
+    }
+
+    // 3. Menangani perubahan Field & Dropdown
     const fieldChanged = (context) => {
-        const { fieldId, currentRecord } = context;
-
-        // Jika yang diubah adalah dropdown halaman
+        const { fieldId } = context;
+        var rec = currentRecord.get();
+        
+        // Pindah Halaman / Ubah ukuran Halaman
         if (fieldId === 'custpage_page_select' || fieldId === 'custpage_page_size') {
-            let selectedPage = currentRecord.getValue({ fieldId: 'custpage_page_select' });
-            let pageSize = parseInt(currentRecord.getValue({ fieldId: 'custpage_page_size' })) || PAGE_SIZE;
-
-            // Mengambil URL halaman saat ini
-            let currentUrl = new URL(window.location.href);
             
-            // Set atau update parameter 'page' dengan halaman yang baru dipilih
+            // PENTING: Sapu bersih sebelum pindah halaman!
+            syncCurrentPageToMemory(rec);
+            
+            let selectedPage = rec.getValue({ fieldId: 'custpage_page_select' });
+            let pageSize = parseInt(rec.getValue({ fieldId: 'custpage_page_size' }));
+            let selectedIds = rec.getValue({ fieldId: 'custpage_selected_ids' });
+
+            let currentUrl = new URL(window.location.href);
             currentUrl.searchParams.set('page', selectedPage);
             currentUrl.searchParams.set('pagesize', pageSize);
+            currentUrl.searchParams.set('selectedids', selectedIds); // Bawa memori ke URL baru
 
-            // Bypass peringatan default browser "Changes you made may not be saved"
             window.onbeforeunload = null; 
-            // if (typeof setWindowChanged !== 'undefined') {
-            //     setWindowChanged(window, false);
-            // }
-
-            // Reload halaman dengan parameter baru
             window.location.href = currentUrl.toString();
+        }
+        
+        // Pilihan Individual Checkbox (Untuk responsivitas UI saja)
+        if (context.sublistId === 'custpage_recon_list' && context.fieldId === 'custpage_checkbox_select') {
+            syncCurrentPageToMemory(rec);
         }
     };
 
+    // 4. PENTING: Event saat tombol 'Submit Process' ditekan di Suitelet
+    const saveRecord = (context) => {
+        let rec = context.currentRecord;
+        // Sapu bersih sekali lagi agar tombol 'Mark All' yang ditekan tepat sebelum submit ikut terbaca
+        syncCurrentPageToMemory(rec); 
+        return true; 
+    };
 
+    // 5. Tombol Back
     function goBackToUpload() {
         let currentUrl = new URL(window.location.href);
-        // Bersihkan parameter preview agar kembali ke mode upload (awal)
         currentUrl.searchParams.delete('step');
         currentUrl.searchParams.delete('fileId');
         currentUrl.searchParams.delete('page');
         currentUrl.searchParams.delete('bank');
         currentUrl.searchParams.delete('method');
+        currentUrl.searchParams.delete('selectedids'); 
+        currentUrl.searchParams.delete('startdate'); 
+        currentUrl.searchParams.delete('enddate'); 
         
-        if (typeof setWindowChanged !== 'undefined') {
-            setWindowChanged(window, false);
-        }
-        
+        window.onbeforeunload = null;
         window.location.href = currentUrl.toString();
     }
 
     return {
+        pageInit: pageInit,
         fieldChanged: fieldChanged,
-        goBackToUpload : goBackToUpload
+        saveRecord: saveRecord, // Mendaftarkan fungsi saveRecord
+        goBackToUpload: goBackToUpload,
+        applyFilter: applyFilter
     };
 });
