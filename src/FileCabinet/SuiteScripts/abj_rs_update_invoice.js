@@ -136,9 +136,6 @@ define(['N/record', './abj_utils_privy_create_integration_log_record', 'N/runtim
         } catch (logError) {
             log.error('Failed to create integration log', logError.message);
         }
-        IA/SOS0003122
-
-
         return response;
     }
 
