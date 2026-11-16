@@ -7,7 +7,8 @@ define(['N/record'], (record) => {
       jobName,jobType,jobLink,reqBody,
       linkTrx,resBody, isUpdate =false,
        linkItem =null, status= false, logId = null,
-      scriptId ='', deploymentId = '', tranETPNumber = ''
+      scriptId ='', deploymentId = '', tranETPNumber = '',
+      customerHierarchy = null, customerId = null, customerHierarchyConf = null, refNumber = null
     }) => {
       try {
         var sosLogRec;
@@ -118,7 +119,35 @@ define(['N/record'], (record) => {
             value: tranETPNumber
           });
         }
-  
+
+        if(customerHierarchy){
+          sosLogRec.setValue({
+            fieldId: 'custbody_abj_integlog_cust_hierarchy',
+            value: customerHierarchy
+          });
+        }
+
+        if(customerId){
+          sosLogRec.setValue({
+            fieldId: 'custbody_abj_integlog_customer',
+            value: customerId
+          });
+        }
+
+        if(customerHierarchyConf){
+          sosLogRec.setValue({
+            fieldId: 'custbody_abj_integlog_cust_hie_config',
+            value: customerHierarchyConf
+          });
+        }
+
+        if(refNumber){
+          sosLogRec.setValue({
+            fieldId: 'custbody_abj_usage_ref_number',
+            value: refNumber
+          });
+        }
+
         const recId = sosLogRec.save();
         log.debug('SOS Integration Log created with ID:', recId);
         return recId;

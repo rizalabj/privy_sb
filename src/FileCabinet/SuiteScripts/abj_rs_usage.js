@@ -191,7 +191,8 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
             return {
                 status : true,
                 message : 'Usage created successfully.',
-                id : recId
+                id : recId,
+                customer : customer,
             }
         } catch (error) {
             return {
@@ -338,7 +339,11 @@ define(['N/record','./abj_utils_privy_create_integration_log_record','N/runtime'
           logId : integrationLogRecordId,
           scriptId : scriptId,
           deploymentId : deploymentId,
-          tranETPNumber : context?.data?.tran_etp || ''
+          tranETPNumber : context?.data?.tran_etp || '',
+          customerHierarchy : context?.data?.customer_hierarchy_id || null,
+          customerId : usage?.customer || null,
+          customerHierarchyConf : context?.data?.customer_hierarchy_config_id || null,
+          refNumber : context?.data?.ref_number || null 
         });
         return response;
     };

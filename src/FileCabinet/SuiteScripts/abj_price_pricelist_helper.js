@@ -313,12 +313,40 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         sol.transaction ASC NULLS LAST
     `;
 
+    
     // log.debug({ title: 'Price List Query', details: suiteQL });
     logLongString('Price List Query', suiteQL);
     const resultSet = query.runSuiteQL({ query: suiteQL });
-    const mappedResults = resultSet.asMappedResults();
+    let mappedResults = resultSet.asMappedResults();
 
-    log.debug('mappedResults', mappedResults);
+    log.debug('mappedResults pricelist', mappedResults);
+    if(mappedResults.length === 0){
+      log.debug('No price list entries found for the given criteria.');
+      const querySOCarryOver = `
+        SELECT
+          t.id AS so_id,
+          tl.item AS item_id,
+          tl.id AS so_line_id,
+          t.type AS so_type,
+          t.trandate AS so_trandate,
+          -1 AS price_level,
+          0 AS published_price,
+          tl.custcol_abj_qty_usage AS so_qty_usage
+        FROM transactionline tl
+        JOIN transaction t ON t.id = tl.transaction
+        WHERE t.type = 'SalesOrd' AND t.customForm = 190
+        AND TO_DATE('${escapedDate}', 'YYYY-MM-DD')
+          BETWEEN tl.custcol_abj_billing_start_date
+          AND tl.custcol_abj_billing_end_date
+        AND tl.item IN (${itemIdList.join(', ')})`;
+      
+      logLongString('Query SO Carry Over', querySOCarryOver);
+
+      const resultSetSOCarryOver = query.runSuiteQL({ query: querySOCarryOver });
+      mappedResults = resultSetSOCarryOver.asMappedResults();
+
+      log.debug('mappedResultsSOCarryOver', mappedResults);
+    }
 
     const bucketMapsByItem = {};
     
@@ -669,7 +697,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         value: matchedPrice.soLineId
       });
     }
-    if (matchedPrice.isPrepaidOrPostpaid !== null && matchedPrice.isPrepaidOrPostpaid !== undefined) {
+    if (matchedPrice.isPrepaidOrPostpaid !== null && matchedPrice.isPrepaidOrPostpaid !== undefined && matchedPrice.isPrepaidOrPostpaid) {
       transactionRecord.setSublistValue({
         sublistId: ITEM_SUBLIST_ID,
         fieldId: 'cseg_abj_billing_ty',
