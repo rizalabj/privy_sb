@@ -27,11 +27,25 @@ define(['N/record', './abj_utils_privy_create_integration_log_record', 'N/runtim
 
     // Helper untuk parsing ISO date format dari JSON ke JS Date object
     const parseISODate = (isoString) => {
-        if(!isoString || isoString == undefined || isoString == null || isoString == ''){
+        if (!isoString) {
             return '';
         }
-        return new Date(isoString);
-    }
+
+        // Ambil bagian tanggal saja: "2026-11-13"
+        const datePart = String(isoString).split('T')[0];
+        const parts = datePart.split('-');
+
+        if (parts.length !== 3) {
+            return '';
+        }
+
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1; 
+        const day = parseInt(parts[2], 10);
+        
+        return new Date(year, month, day, 0, 0, 0, 0);
+    };
+
 
     const updateInvoiceRecord = (data) => {
         try {
