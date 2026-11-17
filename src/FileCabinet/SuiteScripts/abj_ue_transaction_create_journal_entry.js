@@ -49,6 +49,48 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         jeRec.commitLine({ sublistId: 'line' });
     };
 
+    const createJournalEntry = (params) => {
+        const { 
+            jeRecId, 
+            customFormId, // Opsional: Kosongkan jika ingin pakai form Standard
+            startDate, 
+            pic, 
+            headerBillingType, 
+            approved, 
+            journalLines, // Array of object berisi data per baris yang sudah dimapping
+            soLinkId,
+            memo,
+            currency
+        } = params;
+
+        try {
+            let jeRec = jeRecId 
+                ? record.load({ type: record.Type.JOURNAL_ENTRY, id: jeRecId, isDynamic: true })
+                : record.create({ type: record.Type.JOURNAL_ENTRY, isDynamic: true });
+
+            
+            if (customFormId) jeRec.setValue({ fieldId: 'customform', value: customFormId });
+            if (approved) jeRec.setValue({ fieldId: 'approvalstatus', value: 2 }); 
+            if (startDate) jeRec.setValue({ fieldId: 'trandate', value: startDate });
+            if (pic) jeRec.setValue({ fieldId: 'custbody2', value: pic });
+            if (headerBillingType) jeRec.setValue({ fieldId: 'cseg_abj_billing_ty', value: headerBillingType });
+            if (soLinkId) jeRec.setValue({ fieldId: 'custbody_abj_so_link', value: soLinkId });
+            if (memo) jeRec.setValue({ fieldId: 'memo', value: memo });
+            if (currency) jeRec.setValue({ fieldId: 'currency', value: currency });
+
+            let lineJournal = 0;
+            for (const line of journalLines) {
+                setJournalLine({ ...line, jeRec, lineJournal });
+                lineJournal++;
+            }
+
+            return jeRec.save();
+        } catch (error) {
+            log.error('Error create journal entry blueprint', error);
+            return null;
+        }
+    };
+
     const createReconJournalEntry = ({
         jeRecId, startDate, pic, headerBillingType, approved, lineItem, discountItem
     }) => {
@@ -128,6 +170,71 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         }
     };
 
+    const getCOAItems = (items) =>{
+        let coaItems = search.create({
+            type: 'item',
+            filters: [['internalid', 'anyof', items.map(item => item.itemId)]],
+            columns: ['custitem_abj_income_usage_account', 'incomeaccount', 'custitem_abj_reconciliation_account', 'custitem_abj_invoice_pg_coa']
+        }).run().getRange({ start: 0, end: items.length });
+        
+        let itemAccounts = {};
+        coaItems.forEach(item => {
+            let reconAcc = item.getValue('custitem_abj_reconciliation_account');
+            itemAccounts[item.id] = {
+                incomeAccount: item.getValue('incomeaccount'),
+                reconAccount : reconAcc,
+                usageAccount: item.getValue('custitem_abj_income_usage_account'),
+                discountAccount: reconAcc,
+                pgAccount : item.getValue('custitem_abj_invoice_pg_coa')
+            };
+        });
+
+        return itemAccounts;
+    }
+
+    const getLineItemData = (rec) =>{
+        let extractedItems = [];
+        let discountItems = [];
+        let lineCount = rec.getLineCount({ sublistId: 'item' });
+        let entity = rec.getValue({ fieldId: 'entity' }); 
+        for (let i = 0; i < lineCount; i++) {
+            let itemId = rec.getSublistValue({ sublistId: 'item', fieldId: 'item', line: i });
+            if (!itemId) continue; // Skip baris kosong
+
+            let itemType = rec.getSublistValue({ sublistId: 'item', fieldId: 'itemtype', line: i });
+            let baseData = {
+                itemId: itemId,
+                rate: rec.getSublistValue({ sublistId: 'item', fieldId: 'rate', line: i }) || 0,
+                finalPrice: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_final_price', line: i }) || 0,
+                reconVariance: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_recon_variance', line: i }) || 0,
+                oneTimeDiscount: Math.abs(rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_dis_onetime_pcs', line: i }) || 0),
+                trxId: rec.id,
+                mainProductSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_main_prod', line: i }),
+                subProductSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_sub_prod', line: i }),
+                productSource: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_product_source', line: i }),
+                productTypeSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_prod_type', line: i }),
+                enterpriseSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_enterprise', line: i }),
+                merchantSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_merchant', line: i }),
+                applicationSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_applicatio', line: i }),
+                channelSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_channel_se', line: i }), 
+                prepaidPostpaidSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_billing_ty', line: i }), 
+                classBillingType: rec.getSublistValue({ sublistId: 'item', fieldId: 'class', line: i }), 
+                itemText: rec.getSublistText({ sublistId: 'item', fieldId: 'item', line: i }),
+                entity: entity,
+                lineSO: rec.getSublistValue({ sublistId: 'item', fieldId: 'line', line: i }),
+                amount: rec.getSublistValue({ sublistId: 'item', fieldId: 'amount', line: i }),
+            };
+
+            if (itemType === 'Discount') {
+                discountItems.push(baseData);
+            } else {
+                extractedItems.push(baseData);
+            }
+        }
+
+        return { extractedItems, discountItems}
+    }
+
     const afterSubmit = (context) => {
         log.debug('After Submit Type', context.type);
         if (context.type === context.UserEventType.DELETE) return;
@@ -136,6 +243,7 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         const oldRec = context.oldRecord;
         const recType = rec.type;
         const recId = rec.id;
+        let memoHeader = '';
 
         if (!APPROVAL_CONFIG[recType]) return;
         const config = APPROVAL_CONFIG[recType];
@@ -163,85 +271,102 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
         log.debug('Approval Status Details', `Old: ${oldStatus} | New: ${newDbStatus} | IsApproved: ${isNowApproved}`);
 
         // RECON JOURNAL (Custom Form 112) ubah ke 100 (punya invoice)
-        if (customForm == '100') {
+        if (customForm == '100' || customForm == '187') {
             if (!isNowApproved) {
-                log.audit('Skipping Recon JE', `Transaction ${recId} is not approved yet.`);
+                log.audit('Skipping JE Creation', `Transaction ${recId} is not approved yet.`);
                 return;
             }
 
-            let lineItem = [];
-            let discountItem = [];
-            let entity = rec.getValue({ fieldId: 'entity' }); 
-            let lineCount = rec.getLineCount({ sublistId: 'item' });
-            
-            for (let i = 0; i < lineCount; i++) {
-                let itemType = rec.getSublistValue({ sublistId: 'item', fieldId: 'itemtype', line: i });
-                let premiumDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_discount_premium', line: i });
-                let oneTimeDiscount = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_dis_onetime_pcs', line: i });
-                let itemText = rec.getSublistText({ sublistId: 'item', fieldId: 'item', line: i });
-                let reconVariance = rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_recon_variance', line: i }) || 0;
+            // =====================================================================
+            // 1. KUMPULKAN DATA LINE ITEM (HANYA 1 KALI PERULANGAN)
+            // =====================================================================
+            let lineItemData = getLineItemData(rec);
+            let extractedItems = lineItemData.extractedItems;
+            let discountItems = lineItemData.discountItems;       
+            let soLinkId = recId; // Asumsi link ke SO
+            if (extractedItems.length === 0) return;
 
-                let lineData = {
-                    itemId: rec.getSublistValue({ sublistId: 'item', fieldId: 'item', line: i }),
-                    rate: rec.getSublistValue({ sublistId: 'item', fieldId: 'rate', line: i }),
-                    publishedPrice: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_published_price', line: i }),
-                    finalPrice: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_final_price', line: i }),
-                    qty: rec.getSublistValue({ sublistId: 'item', fieldId: 'quantity', line: i }),
-                    reconVariance: reconVariance,
-                    premiumDiscount: premiumDiscount ? Math.abs(premiumDiscount) : '',
-                    oneTimeDiscount: oneTimeDiscount ? Math.abs(oneTimeDiscount) : '',
-                    trxId: recId,
-                    mainProductSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_main_prod', line: i }),
-                    subProductSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_sub_prod', line: i }),
-                    productSource: rec.getSublistValue({ sublistId: 'item', fieldId: 'custcol_abj_product_source', line: i }),
-                    productTypeSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_prod_type', line: i }),
-                    enterpriseSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_enterprise', line: i }),
-                    merchantSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_merchant', line: i }),
-                    applicationSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_applicatio', line: i }),
-                    channelSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_channel_se', line: i }), 
-                    prepaidPostpaidSegment: rec.getSublistValue({ sublistId: 'item', fieldId: 'cseg_abj_billing_ty', line: i }), 
-                    classBillingType: rec.getSublistValue({ sublistId: 'item', fieldId: 'class', line: i }), 
-                    itemDescription: `${itemText} - Reconciliation`,
-                    entity: entity,
-                    lineSO: rec.getSublistValue({ sublistId: 'item', fieldId: 'line', line: i })
-                };
+            // =====================================================================
+            // 2. MAPPING DATA BERDASARKAN CUSTOM FORM
+            // =====================================================================
+            let journalLinesToSubmit = [];
+            let targetCustomFormId = null; 
 
+            // --- LOGIKA FORM 100 ---
+            if (customForm == '100') {
+                targetCustomFormId = 30; // Set form 30
                 
+                // Filter tambahan khusus form 100: variance tidak boleh 0
+                let validReconItems = extractedItems.filter(item => item.reconVariance !== 0);
+                if (validReconItems.length === 0) return;
 
-                if (itemType === 'Discount') {
-                    discountItem.push(lineData);
-                } else {
-                    if(!lineData.itemId || lineData.reconVariance === 0) {
-                        log.audit('Skipping Line', `Line ${i + 1} skipped due to missing item or zero recon variance.`);
-                        continue;
+                // Ambil COA
+                let itemAccounts = getCOAItems(validReconItems);
+
+                // Map Debit/Credit Form 100
+                for (const item of validReconItems) {
+                    const itemAcc = itemAccounts[item.itemId];
+                    const baseAmount = item.finalPrice * item.reconVariance;
+                    const oneTimeDiscountAmount = item.oneTimeDiscount * item.reconVariance;
+                    const incomeAmount = (baseAmount + oneTimeDiscountAmount) * -1;
+                    const itemDesc = `${item.itemText} - Reconciliation`;
+
+                    const createLine = (acc, amt, desc, eType = 'debit') => {
+                        journalLinesToSubmit.push({ ...item, account: acc, amount: amt, itemDescription: desc || itemDesc, entryType: eType });
+                    };
+
+                    if (item.reconVariance < 0) {
+                        createLine(itemAcc.usageAccount, baseAmount, itemDesc);
+                        if (item.oneTimeDiscount) createLine(itemAcc.discountAccount, oneTimeDiscountAmount, 'One Time Discount');
+                        createLine(itemAcc.reconAcc, incomeAmount, itemDesc);
+                    } else {
+                        createLine(itemAcc.reconAcc, incomeAmount, itemDesc);
+                        if (item.oneTimeDiscount) createLine(itemAcc.discountAccount, oneTimeDiscountAmount, 'One Time Discount');
+                        createLine(itemAcc.usageAccount, baseAmount, itemDesc);
                     }
-                    lineItem.push(lineData);
+                }
+            } 
+            
+            if (customForm == '187') {
+                targetCustomFormId = null; // Standard form (tidak diset)
+                let itemAccounts = getCOAItems(extractedItems);
+                memoHeader = 'Invoice PG Journal';
+                
+                // Map Debit/Credit Form 187 (Menggunakan semua extractedItems)
+                for (const item of extractedItems) {
+                    const itemAcc = itemAccounts[item.itemId];
+                    let rateAmount = item.amount;
+                    const itemDesc = `${item.itemText}`;
+
+                    const createLine = (acc, amt, desc, eType = 'debit') => {
+                        journalLinesToSubmit.push({ ...item, account: acc, amount: amt, itemDescription: desc || itemDesc, entryType: eType });
+                    };
+
+                    if(rateAmount > 0){
+                        createLine(itemAcc.incomeAccount, rateAmount, itemDesc);
+                        createLine(itemAcc.pgAccount, rateAmount * -1, itemDesc, 'credit');
+                    }
+
                 }
             }
 
-            log.debug('Line Items for Recon JE', { lineItem, discountItem });
-
-            if(lineItem.length === 0) {
-                log.audit('No Valid Lines', `Transaction ${recId} has no valid lines for journal entry creation.`);
-                return;
-            }
-
-            const reconJournalEntry = createReconJournalEntry({
-                jeRecId: rec.getValue({ fieldId: 'custbody_abj_je_link' }),
-                startDate: rec.getValue({ fieldId: 'trandate' }),
-                pic: rec.getValue({ fieldId: 'custbody2' }),
-                headerBillingType: rec.getValue({ fieldId: 'cseg_abj_billing_ty' }),
-                approved: isNowApproved,
-                lineItem: lineItem,
-                discountItem: discountItem
-            });
-            
-            if (reconJournalEntry) {
-                record.submitFields({
-                    type: recType,
-                    id: recId,
-                    values: { custbody_abj_je_link: reconJournalEntry }
+            if (journalLinesToSubmit.length > 0) {
+                const jeId = createJournalEntry({ // Fungsi blueprint dari jawaban sebelumnya
+                    jeRecId: rec.getValue({ fieldId: 'custbody_abj_je_link' }),
+                    customFormId: targetCustomFormId, 
+                    startDate: rec.getValue({ fieldId: 'trandate' }),
+                    pic: rec.getValue({ fieldId: 'custbody2' }),
+                    headerBillingType: rec.getValue({ fieldId: 'cseg_abj_billing_ty' }),
+                    approved: isNowApproved,
+                    journalLines: journalLinesToSubmit,
+                    soLinkId: soLinkId,
+                    memo : memoHeader,
+                    currency : rec.getValue({ fieldId: 'currency' })
                 });
+                
+                if (jeId) {
+                    record.submitFields({ type: recType, id: recId, values: { custbody_abj_je_link: jeId } });
+                }
             }
             return;
         }
