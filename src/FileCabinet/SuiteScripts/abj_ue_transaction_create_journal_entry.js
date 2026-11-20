@@ -399,6 +399,13 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
                 });
                 const taskId = mrTask.submit();
                 log.audit('Map/Reduce Triggered', `Task ID: ${taskId} | Record ID: ${recId}`);
+                const mrTask2 = task.create({
+                    taskType: task.TaskType.MAP_REDUCE,
+                    scriptId: 'customscript_abj_mr_trx_auto_create_je_m',
+                    params: { custscript_abj_trx_je_montly_rec_id : recId }
+                });
+                const taskId2 = mrTask2.submit();
+                log.audit('Map/Reduce 2 Triggered', `Task ID: ${taskId2} | Record ID: ${recId}`);
             } catch (error) {
                 log.error({ title: `Failed to trigger Map/Reduce for ID: ${recId}`, details: error });
             }

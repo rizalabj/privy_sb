@@ -172,13 +172,16 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       currentTrxPrepaidJoin = `
         LEFT JOIN (
           SELECT
+            tl.custcol_abj_so_id,
             tl.custcol_abj_order_line,
             SUM(ABS(tl.quantity)) AS current_trx_usage
           FROM transactionline tl
           WHERE tl.transaction = ${trxIdNum}
             AND tl.custcol_abj_order_line IS NOT NULL
-          GROUP BY tl.custcol_abj_order_line
+            AND tl.custcol_abj_so_id IS NOT NULL
+          GROUP BY tl.custcol_abj_so_id, tl.custcol_abj_order_line
         ) current_prepaid_trx ON current_prepaid_trx.custcol_abj_order_line = sol.id
+          AND current_prepaid_trx.custcol_abj_so_id = sol.transaction
       `;
 
       // 3. Select untuk Prepaid: Kurangi usage di SO dengan usage dari transaksi ini
@@ -246,9 +249,9 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
             t.trandate AS so_trandate
           FROM transactionline tl
           JOIN transaction t ON t.id = tl.transaction
-          WHERE (t.type = 'SalesOrd' AND (t.status = 'B' OR t.status = 'F' OR t.status = 'G')) 
-            OR (t.type = 'SalesOrd' AND t.customForm = 191 AND (t.status = 'B' OR t.status = 'F' OR t.status = 'G') AND t.custbody_abj_document_status = 8)
-            OR (t.type = 'CustInvc' AND tl.createdFrom IS NULL AND t.customForm = 187)
+          WHERE (t.type = 'SalesOrd' AND (t.status = 'B' OR t.status = 'F' OR t.status = 'G')
+              AND (COALESCE(t.customForm, 0) != 191 OR t.custbody_abj_document_status = 8))
+          OR (t.type = 'CustInvc' AND tl.createdFrom IS NULL AND t.customForm = 187)
         ) sol
           ON sol.item = pl.${PRICE_LIST_FIELD_MAP.item}
           AND sol.custcol_abj_id_price_list_line = pl.id
@@ -310,7 +313,8 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         AND pl.${PRICE_LIST_FIELD_MAP.item} IN (${itemIdList.join(', ')})
       ORDER BY
         sol.so_trandate ASC NULLS LAST,
-        sol.transaction ASC NULLS LAST
+        sol.transaction ASC NULLS LAST,
+        sol.id ASC NULLS LAST
     `;
 
     
@@ -335,10 +339,13 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         FROM transactionline tl
         JOIN transaction t ON t.id = tl.transaction
         WHERE t.type = 'SalesOrd' AND t.customForm = 190
-        AND TO_DATE('${escapedDate}', 'YYYY-MM-DD')
-          BETWEEN tl.custcol_abj_billing_start_date
-          AND tl.custcol_abj_billing_end_date
-        AND tl.item IN (${itemIdList.join(', ')})`;
+          AND TO_DATE('${escapedDate}', 'YYYY-MM-DD')
+            BETWEEN tl.custcol_abj_billing_start_date
+            AND tl.custcol_abj_billing_end_date
+          AND tl.custcol_abj_privy_customer_hierarchy_ = '${escapedHierarchyCustomerId}'
+          AND t.entity = '${escapedCustomerId}'
+          AND tl.item IN (${itemIdList.join(', ')})
+        ORDER BY t.trandate ASC, t.id ASC, tl.id ASC`;
       
       logLongString('Query SO Carry Over', querySOCarryOver);
 
@@ -410,46 +417,42 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
     return allocations;
   };
 
+
   const resolveNormalTiering = (tiers, quantity) => {
     const sortedTiers = [...tiers].sort((a, b) => a.minimumQuantity - b.minimumQuantity);
     log.debug('sortedTiers', sortedTiers);
-    
-    let selectedTier = null;
-    let isFullyCovered = false;
 
-    let usedQty = 0;
+    // usedQuantity per baris tier → total volume bulan ini = jumlah semua tier
+    const totalUsed = sortedTiers.reduce((sum, t) => sum + Math.abs(t.usedQuantity || 0), 0);
+    const totalVolume = totalUsed + quantity;
+
+    // volume total yang sama dipakai untuk mengecek setiap tier
+    let selectedTier = null;
     for (const price of sortedTiers) {
-      usedQty = Number(usedQty) + Math.abs(price.usedQuantity || 0);  
-      const totalVolume = usedQty + quantity;
       const maxQty = price.maximumQuantity ?? Infinity;
-      log.debug('checking tier', { price, totalVolume, minQty : price.minimumQuantity ,maxQty });
+      log.debug('checking tier', { price, totalVolume, minQty: price.minimumQuantity, maxQty });
+
       if (totalVolume >= price.minimumQuantity && totalVolume <= maxQty) {
-        log.debug('selected tier', price);
         selectedTier = price;
-        isFullyCovered = true;
-        break; 
+        break;
       }
     }
 
-    log.debug('normal tiered allocation', { selectedTier, isFullyCovered, quantity });
-    if (!isFullyCovered) {
-      selectedTier = sortedTiers[sortedTiers.length - 1];
-      
-      const usedQty = Math.abs(selectedTier.usedQuantity || 0);
-      const maxQty = selectedTier.maximumQuantity ?? Infinity;
-      
-      const availableQuotaInTier = Math.max(0, maxQty - usedQty);
-      const qtyToProcess = Math.min(quantity, availableQuotaInTier);
-      const shortfall = quantity - qtyToProcess;
-
-      log.debug('normal tiered allocation (mentok/shortfall)', { matchedPrice: selectedTier, quantity: qtyToProcess, shortfall });
-      
-      return { allocations: [{ matchedPrice: selectedTier, quantity: qtyToProcess }], shortfall };
-    } else {
-      log.debug('normal tiered allocation (full cover)', { matchedPrice: selectedTier, quantity });
-      
+    if (selectedTier) {
       return { allocations: [{ matchedPrice: selectedTier, quantity }], shortfall: 0 };
     }
+
+    // tidak ada tier yang memuat volume → melewati maksimum tier terakhir
+    const lastTier = sortedTiers[sortedTiers.length - 1];
+    const maxQty = lastTier.maximumQuantity ?? Infinity;
+    const availableQuota = Math.max(0, maxQty - totalUsed);
+    const qtyToProcess = Math.min(quantity, availableQuota);
+    const shortfall = quantity - qtyToProcess;
+
+    return {
+      allocations: qtyToProcess > 0 ? [{ matchedPrice: lastTier, quantity: qtyToProcess }] : [],
+      shortfall
+    };
   };
 
   const resolveMatchedPrices = (priceListEntries, quantity) => {
@@ -457,7 +460,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
 
     if (matchedPrices.length == 0) return { allocations: [], shortfall: quantity };
     
-    if (matchedPrices.length == 1 && matchedPrices[0].isTiering != 1 && matchedPrices[0].isAccumulatedTiering != 1) {
+    if (matchedPrices.length == 1 && matchedPrices[0].isTiering != 1 && matchedPrices[0].isAccumulatedTiering != 1 && matchedPrices[0].isMinAchievement != 1) {
       return { allocations: [{ matchedPrice: matchedPrices[0], quantity }], shortfall: 0 };
     }
 
@@ -490,7 +493,12 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       return { allocations: accumulatedAllocations, shortfall };
     }
 
-    return { allocations: [{ matchedPrice: matchedPrices[0], quantity }], shortfall: 0 };
+    const fallback = matchedPrices.find(
+      (p) => p.isMinAchievement != 1 && p.isTiering != 1 && p.isAccumulatedTiering != 1
+    );
+    return fallback
+      ? { allocations: [{ matchedPrice: fallback, quantity }], shortfall: 0 }
+      : { allocations: [], shortfall: quantity }; // caller melempar PRICE_LIST_ALLOCATION_FAILED
   };
 
   const resolvePrepaidAllocations = (prepaidBuckets, quantity) => {
@@ -506,7 +514,7 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         continue; 
       }
 
-      const bucketUsed = bucket.soQtyUsage || 0;
+      const bucketUsed = Math.max(0, bucket.soQtyUsage || 0);
       const bucketRemaining = Math.max(0, bucket.soQty - bucketUsed);
 
       if (bucketRemaining <= 0) {
@@ -640,19 +648,10 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         value: Number(matchedPrice.discountOrPremium) * Number(allocatedQuantity)
       });
     }
-    if (matchedPrice.soOneTimeDiscountPerPcs) {
-      transactionRecord.setSublistValue({
-        sublistId: ITEM_SUBLIST_ID,
-        fieldId: 'custcol_abj_dis_onetime_pcs',
-        line,
-        value: Math.abs(Number(matchedPrice.soOneTimeDiscountPerPcs))
-      });
-      transactionRecord.setSublistValue({
-        sublistId: ITEM_SUBLIST_ID,
-        fieldId: 'custcol_abj_one_time_discount',
-        line,
-        value: Math.abs(Number(matchedPrice.soOneTimeDiscountPerPcs)) * Number(allocatedQuantity)
-      });
+    if (matchedPrice.isPrepaidOrPostpaid === PREPAID_VALUE) {
+      const perPcs = Math.abs(Number(matchedPrice.soOneTimeDiscountPerPcs || 0));
+      transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'custcol_abj_dis_onetime_pcs', line, value: perPcs });
+      transactionRecord.setSublistValue({ sublistId: ITEM_SUBLIST_ID, fieldId: 'custcol_abj_one_time_discount', line, value: perPcs * Number(allocatedQuantity) });
     }
     if (matchedPrice.enterpriseSegment !== null && matchedPrice.enterpriseSegment !== undefined) {
       transactionRecord.setSublistValue({
@@ -789,6 +788,9 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
         if (!itemId) {
           continue;
         }
+        if (quantity <= 0) {
+          continue; // tidak ada yang perlu dialokasikan
+        }
 
         const priceListEntries = priceLookupMap[String(itemId)];
         if (!priceListEntries || priceListEntries.length === 0) {
@@ -815,6 +817,9 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
           }
 
           allocations = prepaidAllocations;
+          prepaidAllocations.forEach(({ matchedPrice, quantity: q }) => {
+            matchedPrice.soQtyUsage = (matchedPrice.soQtyUsage || 0) + q; // kurangi sisa bucket di memori
+          });
         } else {
           const { allocations: matchedAllocations, shortfall } = resolveMatchedPrices(priceListEntries, quantity);
           
@@ -838,16 +843,19 @@ define(['N/query', 'N/log', 'N/error'], (query, log, error) => {
       log.debug('line plans', linePlans);
 
       if (warningMessages.length > 0) {
-          log.audit('Pricelist Partial Fulfillment', warningMessages.join(' | '));
-          
-          // CONTOH: Simpan ke custom field (Pastikan ID field ini valid di NetSuite Anda)
-          // transactionRecord.setValue({ fieldId: 'custbody_pricelist_warnings', value: warningMessages.join('\n') });
-          
-          // CONTOH ALTERNATIF: Gabungkan ke memo
-          const currentMemo = transactionRecord.getValue({ fieldId: 'memo' }) || '';
-          const warningText = '[INFO PARSIAL QTY]\n' + warningMessages.join('\n');
-          transactionRecord.setValue({ fieldId: 'memo', value: currentMemo ? currentMemo + '\n\n' + warningText : warningText });
+        log.audit('Pricelist Partial Fulfillment', warningMessages.join(' | '));
       }
+
+      const MEMO_MARK = '[INFO PARSIAL QTY]';
+      const baseMemo = String(transactionRecord.getValue({ fieldId: 'memo' }) || '')
+        .split(MEMO_MARK)[0].trim();
+
+      transactionRecord.setValue({
+        fieldId: 'memo',
+        value: warningMessages.length
+          ? (baseMemo ? baseMemo + '\n\n' : '') + MEMO_MARK + '\n' + warningMessages.join('\n')
+          : baseMemo
+      });
       
 
       for (let i = linePlans.length - 1; i >= 0; i -= 1) {

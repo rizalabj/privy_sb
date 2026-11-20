@@ -105,7 +105,16 @@ define(['N/record', './abj_utils_privy_create_integration_log_record', 'N/runtim
                 id : recId
             }
         } catch (error) {
+            log.error('error', error);
             log.error('Error Update Invoice', error.message);
+            if (error.name === 'RCRD_HAS_BEEN_CHANGED') {
+                return {
+                    status : true,
+                    message : 'Invoice updated successfully.',
+                    id : data.data.invoice_internal_id
+                }
+            }
+
             return {
                 status : false,
                 message : error.message,
