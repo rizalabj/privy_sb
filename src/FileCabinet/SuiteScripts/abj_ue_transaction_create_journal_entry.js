@@ -373,8 +373,8 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
         // JOURNAL AMORT : MAP/REDUCE
         const allowedCustomForm = [
-            "132", // Privy - Sales Order Prepaid
-            "161", // Privy - Sales Order Postpaid Top Up
+            "195", // Privy - Sales Order Prepaid
+            "196", // Privy - Sales Order Postpaid Top Up
             "187", // Privy - Invoice (Payment Gateway)
             "189", // Privy - Sales Order Prepaid By Pass
             "191" // Privy - Sales Order Prepaid Without Top Up
