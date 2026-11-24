@@ -4,7 +4,7 @@
  */
 define(['N/record', './abj_utils_privy_create_integration_log_record', 'N/runtime', 'N/format'], (record, integrationLogRecord, runtime, format) => {
 
-    const generateResponse = ({statusParam, message, invoiceNumber, id}) => {
+    const generateResponse = ({ statusParam, message, invoiceNumber, id }) => {
         let statusCode = statusParam ? 200 : 400;
         let status = statusParam ? "success" : "failed";
         return {
@@ -13,25 +13,45 @@ define(['N/record', './abj_utils_privy_create_integration_log_record', 'N/runtim
             "message": message,
             "data": {
                 "invoice_number": invoiceNumber || "",
-                "internal_id" : id || ""
+                "internal_id": id || ""
             }
-        }
-    }
+        };
+    };
 
     const setFieldValue = (rec, fieldId, value) => {
         rec.setValue({
-            fieldId : fieldId,
-            value : value
-        })
-    }
+            fieldId: fieldId,
+            value: value
+        });
+    };
 
-    // Helper untuk parsing ISO date format dari JSON ke JS Date object
+    const hasKey = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+   
+    const setIfExists = (rec, payload, key, fieldId, transformFn = null) => {
+        if (hasKey(payload, key)) {
+            const val = transformFn ? transformFn(payload[key]) : payload[key];
+            setFieldValue(rec, fieldId, val);
+        }
+    };
+
+    // Helper untuk pasangan flag + date:
+    // - Jika flag tidak dikirim -> keduanya dilewati (tidak berubah)
+    // - Jika flag true -> set flag true & set date dari payload
+    // - Jika flag false -> set flag false & kosongkan date (null)
+    const setFlagWithDate = (rec, payload, flagKey, flagFieldId, dateKey, dateFieldId) => {
+        if (hasKey(payload, flagKey)) {
+            const isChecked = Boolean(payload[flagKey]);
+            setFieldValue(rec, flagFieldId, isChecked);
+            setFieldValue(rec, dateFieldId, isChecked ? parseISODate(payload[dateKey]) : null);
+        }
+    };
+
     const parseISODate = (isoString) => {
         if (!isoString) {
             return '';
         }
 
-        // Ambil bagian tanggal saja: "2026-11-13"
         const datePart = String(isoString).split('T')[0];
         const parts = datePart.split('-');
 
@@ -40,88 +60,72 @@ define(['N/record', './abj_utils_privy_create_integration_log_record', 'N/runtim
         }
 
         const year = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10) - 1; 
+        const month = parseInt(parts[1], 10) - 1;
         const day = parseInt(parts[2], 10);
-        
+
         return new Date(year, month, day, 0, 0, 0, 0);
     };
 
-
     const updateInvoiceRecord = (data) => {
         try {
-            if(data.transaction_type !== 'invoice'){
+            if (data.transaction_type !== 'invoice') {
                 return {
                     status: false,
                     message: 'Invalid transaction type. Only "invoice" is allowed.',
                     id: null
-                }
+                };
             }
-            if(!data?.data?.invoice_internal_id){
+            if (!data?.data?.invoice_internal_id) {
                 return {
                     status: false,
                     message: 'invoice_internal_id is required for update invoice.',
                     id: null
-                }
+                };
             }
 
-            // Load Record Invoice
+            const payload = data.data;
+
             let rec = record.load({
-                type : record.Type.INVOICE,
-                id : data.data.invoice_internal_id,
+                type: record.Type.INVOICE,
+                id: payload.invoice_internal_id,
                 isDynamic: true
             });
 
-            log.debug('Invoice Data Payload', data.data);
+            log.debug('Invoice Data Payload', payload);
 
-            
-            setFieldValue(rec, 'custbody_abj_sign', data.data.sign);
-            setFieldValue(rec, 'custbody_abj_tax_invoice', data.data.tax_invoice);
-            setFieldValue(rec, 'custbody_abj_soft_file', data.data.soft_file);
-            setFieldValue(rec, 'custbody_abj_sendbyemail', data.data.send_date_by_email);
-            if(data.data.sign){
-                setFieldValue(rec, 'custbody_abj_sign_date', parseISODate(data.data.sign_date));
-            }else{
-                setFieldValue(rec, 'custbody_abj_sign_date', null);
-            }
-            if(data.data.tax_invoice){
-                setFieldValue(rec, 'custbody_abj_tax_invoice_date', parseISODate(data.data.tax_invoice_date));
-            }else{
-                setFieldValue(rec, 'custbody_abj_tax_invoice_date', null);
-            }
-            if(data.data.soft_file){
-                setFieldValue(rec, 'custbody_abj_soft_file_date', parseISODate(data.data.soft_file_date));
-            }else{
-                setFieldValue(rec, 'custbody_abj_soft_file_date', null);
-            }
-            
+            setFlagWithDate(rec, payload, 'sign', 'custbody_abj_sign', 'sign_date', 'custbody_abj_sign_date');
+            setFlagWithDate(rec, payload, 'tax_invoice', 'custbody_abj_tax_invoice', 'tax_invoice_date', 'custbody_abj_tax_invoice_date');
+            setFlagWithDate(rec, payload, 'soft_file', 'custbody_abj_soft_file', 'soft_file_date', 'custbody_abj_soft_file_date');
+
+            setIfExists(rec, payload, 'send_date_by_email', 'custbody_abj_sendbyemail', parseISODate);
 
             log.debug('saving', 'progress');
             let recId = rec.save();
             log.debug('saving', 'done ' + recId);
 
             return {
-                status : true,
-                message : 'Invoice updated successfully.',
-                id : recId
-            }
+                status: true,
+                message: 'Invoice updated successfully.',
+                id: recId
+            };
         } catch (error) {
             log.error('error', error);
             log.error('Error Update Invoice', error.message);
             if (error.name === 'RCRD_HAS_BEEN_CHANGED') {
                 return {
-                    status : true,
-                    message : 'Invoice updated successfully.',
-                    id : data.data.invoice_internal_id
-                }
+                    status: true,
+                    message: 'Invoice updated successfully.',
+                    id: data.data.invoice_internal_id
+                };
             }
 
             return {
-                status : false,
-                message : error.message,
-                id : null
-            }
+                status: false,
+                message: error.message,
+                id: null
+            };
         }
-    }
+    };
 
     const put = (context) => {
         log.debug('context', context);
@@ -129,45 +133,39 @@ define(['N/record', './abj_utils_privy_create_integration_log_record', 'N/runtim
         let invoiceUpdate = updateInvoiceRecord(context);
         log.debug('invoiceUpdate', invoiceUpdate);
 
-        let response = generateResponse({ 
-            statusParam : invoiceUpdate.status, 
-            message : invoiceUpdate.message,
-            invoiceNumber : context?.data?.invoice_number,
-            id : invoiceUpdate.id
+        let response = generateResponse({
+            statusParam: invoiceUpdate.status,
+            message: invoiceUpdate.message,
+            invoiceNumber: context?.data?.invoice_number,
+            id: invoiceUpdate.id
         });
 
-        // Create Integration Log Record
         try {
             var integrationLogRecordId = context.log_id || null;
             const scriptObj = runtime.getCurrentScript();
             var scriptId = scriptObj.id;
             var deploymentId = scriptObj.deploymentId;
-            
-            const integrationLogRec = integrationLogRecord.createSOSIntegrationLog({
+
+            integrationLogRecord.createSOSIntegrationLog({
                 jobName: 'ABJ RS | UPDATE INVOICE',
                 jobType: 'Restlet - PUT',
                 jobLink: 'JOB LINK - URL UPDATE INVOICE',
                 reqBody: JSON.stringify(context),
                 resBody: JSON.stringify(response),
                 linkTrx: invoiceUpdate.id,
-                status : invoiceUpdate.status,
-                logId : integrationLogRecordId,
-                scriptId : scriptId,
-                deploymentId : deploymentId,
-                tranETPNumber : context?.data?.tran_etp || ''
+                status: invoiceUpdate.status,
+                logId: integrationLogRecordId,
+                scriptId: scriptId,
+                deploymentId: deploymentId,
+                tranETPNumber: context?.data?.tran_etp || ''
             });
         } catch (logError) {
             log.error('Failed to create integration log', logError.message);
         }
         return response;
-    }
+    };
 
-    // const post = (context) => {
-    //     // Mengarahkan POST ke logika PUT karena format request-nya sama
-    //     return put(context);
-    // }
-
-    return { 
+    return {
         put
     };
 });
