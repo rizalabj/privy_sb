@@ -2,7 +2,7 @@
  * @NApiVersion 2.1
  * @NScriptType UserEventScript
  */
-define(['./abj_price_pricelist_helper', 'N/log', 'N/record','N/search'], (priceListHelper, log, record, search) => {
+define(['./abj_price_pricelist_helper', 'N/log', 'N/record','N/search','N/runtime'], (priceListHelper, log, record, search, runtime) => {
 
   const getComponentItems = (bundleItemId) => {
     const componentItems = [];
@@ -80,7 +80,8 @@ define(['./abj_price_pricelist_helper', 'N/log', 'N/record','N/search'], (priceL
           'PRICE_LIST_ALLOCATION_FAILED'
       ];
 
-      if (error && handledErrors.includes(error.name)) {
+      if (error && handledErrors.includes(error.name) && runtime.executionContext == runtime.ContextType.USER_INTERFACE) {
+        log.debug('context UI error', 'context UI error');
         throw error.message;
       }
       throw error;
