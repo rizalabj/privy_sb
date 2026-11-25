@@ -237,6 +237,7 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
     const afterSubmit = (context) => {
         log.debug('After Submit Type', context.type);
+        log.debug('After Submit Type', context);
         if (context.type === context.UserEventType.DELETE) return;
 
         const rec = context.newRecord;
@@ -392,13 +393,13 @@ define(['N/task', 'N/log', 'N/search', 'N/record'], (task, log, search, record) 
 
         if (isNowApproved) {
             try {
-                const mrTask = task.create({
-                    taskType: task.TaskType.MAP_REDUCE,
-                    scriptId: 'customscript_abj_mr_trx_auto_create_je',
-                    params: { custscript_abj_rec_id: recId }
-                });
-                const taskId = mrTask.submit();
-                log.audit('Map/Reduce Triggered', `Task ID: ${taskId} | Record ID: ${recId}`);
+                // const mrTask = task.create({
+                //     taskType: task.TaskType.MAP_REDUCE,
+                //     scriptId: 'customscript_abj_mr_trx_auto_create_je',
+                //     params: { custscript_abj_rec_id: recId }
+                // });
+                // const taskId = mrTask.submit();
+                // log.audit('Map/Reduce Triggered', `Task ID: ${taskId} | Record ID: ${recId}`);
                 const mrTask2 = task.create({
                     taskType: task.TaskType.MAP_REDUCE,
                     scriptId: 'customscript_abj_mr_trx_auto_create_je_m',

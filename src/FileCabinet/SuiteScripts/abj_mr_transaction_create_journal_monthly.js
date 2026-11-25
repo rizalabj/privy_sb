@@ -403,13 +403,13 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             let sumDiscounts = ((Math.abs(totalDiscoutPremium) + Math.abs(oneTimeDiscount)) / daysToAmortize) * dayDiff;
             const debitAccount = values['custrecord_abj_rev_rec_account.class'].value;
             const creditAccount = values['custitem_abj_income_usage_account.item'].value;
-            let discountAccount;
-            if(sumDiscounts){
-                let lookUpFieldDiscountItem = search.lookupFields({ type: 'item', id: 473, columns: ['incomeaccount'] })
-                if(lookUpFieldDiscountItem && lookUpFieldDiscountItem.incomeaccount[0].value){
-                    discountAccount = lookUpFieldDiscountItem.incomeaccount[0].value;
-                }
-            }
+            let discountAccount = values['custbody_abj_discount_coa'].value;
+            // if(sumDiscounts){
+            //     let lookUpFieldDiscountItem = search.lookupFields({ type: 'item', id: 473, columns: ['incomeaccount'] })
+            //     if(lookUpFieldDiscountItem && lookUpFieldDiscountItem.incomeaccount[0].value){
+            //         discountAccount = lookUpFieldDiscountItem.incomeaccount[0].value;
+            //     }
+            // }
             const mainProductSegment = values['line.cseg_abj_main_prod'].value;
             const subProductSegment = values['line.cseg_abj_sub_prod'].value;
             const productSource = values['custcol_abj_product_source'].value;
@@ -420,8 +420,10 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
             const channelSegment = values['line.cseg_abj_channel_se'].value;
             const prepaidPostpaidSegment = values['line.cseg_abj_billing_ty'].value;
             const classBillingType = billingType;
-            const itemDescription = values.memo;
+            // const itemDescription = values.memo;
             const entity = values.entity ? values.entity.value : null;
+
+            const itemDescription = `${docNo};${itemName}`;
 
             headerBillingType = prepaidPostpaidSegment;
             const approved = checkStartDate(startDate); // start date <= today, then approved, else pending approval. You can implement this logic based on your requirements.
@@ -520,40 +522,42 @@ define(['N/record', 'N/search', 'N/runtime', 'N/format'], (record, search, runti
         try {
             // 5. Update the original Sales Order lines
             // We do this in reduce so we only load and save the SO once, avoiding collision errors.
-            // const soRec = record.load({
-            //     type: recordType,
-            //     id: trxId,
-            //     isDynamic: false // Standard mode is usually faster for line updates
-            // });
+            const soRec = record.load({
+                type: recordType,
+                id: trxId,
+                isDynamic: false // Standard mode is usually faster for line updates
+            });
 
-            // lineUpdates.forEach(update => {
-            //     const lineIndex = soRec.findSublistLineWithValue({
-            //         sublistId: 'item',
-            //         fieldId: 'line',
-            //         value: update.line
-            //     });
+            lineUpdates.forEach(update => {
+                const lineIndex = soRec.findSublistLineWithValue({
+                    sublistId: 'item',
+                    fieldId: 'line',
+                    value: update.line
+                });
 
-            //     if (lineIndex !== -1) {
-            //         soRec.setSublistValue({
-            //             sublistId: 'item',
-            //             fieldId: 'custcol_abj_link_transaction',
-            //             line: lineIndex,
-            //             value: update.jeId
-            //         });
+                if (lineIndex !== -1) {
+                    soRec.setSublistValue({
+                        sublistId: 'item',
+                        fieldId: 'custcol_abj_link_transaction',
+                        line: lineIndex,
+                        value: update.jeId
+                    });
                     
-            //         if (update.memTrxId) {
-            //             soRec.setSublistValue({
-            //                 sublistId: 'item',
-            //                 fieldId: 'custcol_abj_link_memorized_trx',
-            //                 line: lineIndex,
-            //                 value: update.memTrxId
-            //             });
-            //         }
-            //     }
-            // });
+                    if (update.memTrxId) {
+                        soRec.setSublistValue({
+                            sublistId: 'item',
+                            fieldId: 'custcol_abj_link_memorized_trx',
+                            line: lineIndex,
+                            value: update.memTrxId
+                        });
+                    }
+                }
+            });
 
-            // const updatedSoId = soRec.save();
-            // log.debug('Sales Order Updated', `SO ID: ${updatedSoId} successfully updated with JE links.`);
+            const updatedSoId = soRec.save({
+                disableTriggers: true
+            });
+            log.debug('Sales Order Updated', `SO ID: ${updatedSoId} successfully updated with JE links.`);
 
         } catch (e) {
             log.error(`Error Updating SO ${trxId} in Reduce`, e.message);
